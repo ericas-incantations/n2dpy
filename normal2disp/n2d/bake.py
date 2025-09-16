@@ -43,7 +43,6 @@ def bake(
 
     raise NotImplementedError("Bake pipeline will be implemented in a later phase.")
 
-
 def resolve_material_textures(
     mesh_info: MeshInfo,
     uv_set: str,

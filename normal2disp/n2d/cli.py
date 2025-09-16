@@ -8,6 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -16,6 +17,7 @@ from . import get_version
 from .core import ImageIOError, MeshLoadError, TextureAssignmentError, UDIMError
 from .bake import BakeOptions, resolve_material_textures
 from .inspect import _ensure_pyassimp_dependencies, inspect_mesh, run_inspect
+
 
 __all__ = ["main"]
 
@@ -30,6 +32,7 @@ def _configure_logging(verbose: bool) -> None:
 
 def _probe_module(module_name: str) -> Tuple[bool, str | None]:
     if module_name in {"pyassimp", "OpenImageIO"}:
+
         try:
             _ensure_pyassimp_dependencies()
         except MeshLoadError:
@@ -65,7 +68,6 @@ def _parse_material_override(value: str) -> Tuple[str, str]:
         )
 
     return key, pattern
-
 
 @click.group()
 @click.option("--verbose", is_flag=True, help="Enable verbose logging output")
@@ -119,6 +121,7 @@ def inspect_command(
 
     try:
         report = run_inspect(mesh_path, loader=loader)
+
     except MeshLoadError as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # pragma: no cover - safeguard
@@ -163,6 +166,7 @@ def inspect_command(
 
         row_count = 0
         material_row_count = 0
+
         for uv_name in sorted(uv_sets):
             for chart in uv_sets[uv_name].get("charts", []):
                 row_count += 1
@@ -186,6 +190,7 @@ def inspect_command(
             console.print(chart_table)
         if material_row_count:
             console.print(material_table)
+
 
     if inspect_json is not None:
         inspect_json.parent.mkdir(parents=True, exist_ok=True)
@@ -317,3 +322,4 @@ def bake_command(
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()
+

@@ -1,5 +1,6 @@
 import json
 import base64
+
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ def _write_two_island_asset(directory: Path) -> Path:
     obj_data = """\
 o TwoIslands
 mtllib two_islands.mtl
+
 v 0 0 0
 v 1 0 0
 v 1 1 0
@@ -57,6 +59,7 @@ def _write_dummy_png(path: Path) -> None:
 def test_inspect_cli_reports_mirroring(tmp_path: Path) -> None:
     obj_path = _write_two_island_asset(tmp_path)
 
+
     json_path = tmp_path / "report.json"
     cmd = [
         sys.executable,
@@ -83,6 +86,7 @@ def test_inspect_cli_reports_mirroring(tmp_path: Path) -> None:
     assert uv_info["chart_count"] >= 2
     assert uv_info["udims"]
     assert report.get("materials")
+
 
     mirrored_charts = [chart for chart in uv_info["charts"] if chart["mirrored"]]
     assert mirrored_charts, "expected at least one mirrored chart"
@@ -158,3 +162,4 @@ def test_bake_validate_only_with_overrides_succeeds(tmp_path: Path) -> None:
     assert materials["matB"]["tiles_found"] == [1002]
     assert materials["matA"]["missing_tiles"] == []
     assert materials["matB"]["missing_tiles"] == []
+

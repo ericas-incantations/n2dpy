@@ -11,6 +11,7 @@ __all__ = [
 ]
 
 
+
 class N2DError(Exception):
     """Base exception for normal2disp errors."""
 
@@ -29,3 +30,4 @@ class UDIMError(N2DError):
 
 class TextureAssignmentError(N2DError):
     """Raised when CLI texture assignment arguments are invalid."""
+
