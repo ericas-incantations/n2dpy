@@ -88,7 +88,6 @@ GPU compute, vector displacement, direct DCC plugins (API prepares for them).
 ## 3) Project Layout
 
 ```
-normal2disp/
 ├─ n2d/                    # installable package
 │  ├─ __init__.py
 │  ├─ cli.py               # Click CLI
