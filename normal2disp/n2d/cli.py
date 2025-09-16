@@ -8,6 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -101,6 +102,7 @@ def inspect_command(
 
     try:
         report = run_inspect(mesh_path, loader=loader)
+
     except MeshLoadError as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # pragma: no cover - safeguard
@@ -152,7 +154,6 @@ def inspect_command(
 
         if row_count:
             console.print(chart_table)
-
     if inspect_json is not None:
         inspect_json.parent.mkdir(parents=True, exist_ok=True)
         with inspect_json.open("w", encoding="utf-8") as handle:
@@ -160,6 +161,6 @@ def inspect_command(
             handle.write("\n")
         console.print(f"[green]Wrote inspection report to {inspect_json}[/green]")
 
-
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()
+

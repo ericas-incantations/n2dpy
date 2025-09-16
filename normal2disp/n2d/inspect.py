@@ -8,10 +8,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
+
 import numpy as np
 
 from .core import MeshLoadError
 from .mesh_utils import assimp_mesh_to_trimesh, compute_triangle_tangent_frames
+
 
 __all__ = ["run_inspect"]
 
@@ -67,6 +69,7 @@ def _extract_uv_sets(mesh: Any) -> Dict[str, np.ndarray]:
     component_counts = getattr(mesh, "numuvcomponents", [])
 
     uv_sets: Dict[str, np.ndarray] = {}
+
     for index, coords in enumerate(coords_sequences):
         if coords is None:
             continue
@@ -354,3 +357,4 @@ def _uv_points_close(p: np.ndarray, q: np.ndarray, eps: float) -> bool:
 
 def _vector_valid(vec: np.ndarray, eps: float = _VECTOR_EPSILON) -> bool:
     return bool(np.linalg.norm(vec) > eps)
+
