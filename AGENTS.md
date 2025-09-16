@@ -77,7 +77,6 @@ GPU compute, vector displacement, direct DCC plugins (API prepares for them).
 * **Rich** — terminal UI (tables/progress).
 * **scikit‑image** *(or `opencv-python`)* — efficient triangle rasterization for UV masks.
 * *(Optional)* **pyamg** — algebraic multigrid preconditioner for faster Poisson.
-* *(Optional external)* **Blender (headless)** — FBX fallback exporter (see §6.1).
 
 **Install guidance**
 
@@ -94,7 +93,7 @@ GPU compute, vector displacement, direct DCC plugins (API prepares for them).
 │  ├─ core.py              # math, datatypes, errors
 │  ├─ inspect.py           # 'inspect' command logic
 │  ├─ bake.py              # bake pipeline orchestration
-│  ├─ mesh_utils.py        # loaders (pyassimp, Blender fallback) + UV analysis (trimesh)
+│  ├─ mesh_utils.py        # loaders (pyassimp + UV analysis (trimesh)
 │  ├─ image_utils.py       # image I/O (OIIO primary, OpenEXR fallback)
 │  └─ uv_raster.py         # chart mask rasterization (skimage/opencv)
 ├─ tests/
@@ -123,7 +122,6 @@ GPU compute, vector displacement, direct DCC plugins (API prepares for them).
 **`n2d inspect <mesh_path>`**
 
 * `--inspect-json <file>`: write JSON report (materials, UV sets, UDIM tiles, per‑chart `flip_u/flip_v`).
-* `--loader {auto,pyassimp,blender}`: force a loader path (useful for debugging FBX).
 
 **`n2d bake <mesh_path>`**
 
@@ -137,7 +135,7 @@ GPU compute, vector displacement, direct DCC plugins (API prepares for them).
 * `--cg-tol <float>` (default `1e-6`), `--cg-maxiter <int>` (default `10000`).
 * `--deterministic`: set BLAS/OMP threads=1, spawn start method, sorted processing.
 * `--export-sidecars`: write chart masks and chart table JSON per tile.
-* `--loader {auto,pyassimp,blender}`: force loader.
+
 
 **UDIM behavior**
 
@@ -163,7 +161,7 @@ GPU compute, vector displacement, direct DCC plugins (API prepares for them).
 
    * For each triangle, compute signed UV area `A_uv`. Construct tangent/bitangent per triangle; use `sign(det(T,B,N))` to detect handedness. A sign flip indicates a mirrored parameterization.
    * Aggregate per island (majority vote). Decide axis: if tangent along +U flips sign → `flip_u=True`; if bitangent along +V flips → `flip_v=True`.
-5. **Loader fallback (FBX hard‑mode)**: If pyassimp fails or yields inconsistent UV/material data, invoke a headless Blender script to export a compact mesh+UV+material JSON (and/or OBJ/GLTF) that we then load. Expose `--loader blender` to force this.
+
 
 ### 6.2 UV Chart Rasterization
 
@@ -251,7 +249,6 @@ from typing import Optional, Literal, Callable, Sequence, Tuple, List, Dict, Any
 from dataclasses import dataclass
 
 NormalizationMode = Literal["auto", "xyz", "xy", "none"]
-LoaderMode = Literal["auto", "pyassimp", "blender"]
 
 @dataclass
 class BakeOptions:
