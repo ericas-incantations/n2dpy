@@ -16,7 +16,14 @@ import numpy as np
 from .core import MeshLoadError
 from .mesh_utils import compute_triangle_tangent_frames
 
-__all__ = ["run_inspect", "inspect_mesh", "MeshInfo", "UVSetInfo", "ChartInfo"]
+__all__ = [
+    "run_inspect",
+    "inspect_mesh",
+    "MeshInfo",
+    "UVSetInfo",
+    "ChartInfo",
+    "UVSetMeshData",
+]
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,7 +47,20 @@ class ChartInfo:
     udims: Set[int] = field(default_factory=set)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
+class UVSetMeshData:
+    """Raw mesh data for a UV set used during rasterisation."""
+
+    faces: np.ndarray
+    uv: np.ndarray
+    face_materials: np.ndarray
+    face_chart_ids: np.ndarray
+    chart_faces: Mapping[int, np.ndarray]
+    face_udims: Tuple[Set[int], ...]
+
+
+@dataclass(frozen=True, eq=False)
+
 class UVSetInfo:
     """Aggregated information about a UV set."""
 
@@ -48,9 +68,11 @@ class UVSetInfo:
     charts: List[ChartInfo]
     udims: Set[int]
     per_material_udims: Mapping[int, Set[int]]
+    mesh_data: UVSetMeshData
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
+
 class MeshInfo:
     """Summary of mesh UV information used by inspection and baking."""
 
@@ -322,8 +344,8 @@ def _analyse_uv_set(
     vertex_udims = _compute_vertex_udims(uv)
     face_udims = [_collect_face_udims(face, vertex_udims) for face in faces_subset]
 
+    charts, chart_faces = _build_charts(
 
-    charts = _build_charts(
         faces_subset,
         islands,
         uv,
@@ -340,11 +362,26 @@ def _analyse_uv_set(
     for chart in charts:
         per_material_udims.setdefault(chart.material_id, set()).update(chart.udims)
 
+    face_chart_ids = np.zeros(len(faces_subset), dtype=np.int32)
+    for chart_id, indices in chart_faces.items():
+        face_chart_ids[indices] = int(chart_id)
+
+    mesh_data = UVSetMeshData(
+        faces=faces_subset,
+        uv=uv,
+        face_materials=face_materials_subset,
+        face_chart_ids=face_chart_ids,
+        chart_faces=chart_faces,
+        face_udims=tuple(face_udims),
+    )
+
+
     return UVSetInfo(
         name=uv_set_name,
         charts=charts,
         udims=set(udim_list),
         per_material_udims=per_material_udims,
+        mesh_data=mesh_data,
     )
 
 
@@ -449,12 +486,14 @@ def _build_charts(
     face_materials: np.ndarray,
     face_udims: Sequence[Set[int]],
     materials: Mapping[int, str],
-) -> List[ChartInfo]:
+) -> Tuple[List[ChartInfo], Dict[int, np.ndarray]]:
     charts: List[ChartInfo] = []
-
+    chart_faces: Dict[int, np.ndarray] = {}
 
     for chart_id, island in enumerate(islands, start=1):
         face_indices = np.array(island, dtype=int)
+        chart_faces[chart_id] = face_indices
+
         island_faces = faces[face_indices]
         vertex_indices = np.unique(island_faces.reshape(-1))
         uv_coords = uv[vertex_indices]
@@ -514,10 +553,10 @@ def _build_charts(
                 material_name=material_name,
                 udims=chart_udims,
             )
-
         )
 
-    return charts
+    return charts, chart_faces
+
 
 
 def _determine_mirror_axis(

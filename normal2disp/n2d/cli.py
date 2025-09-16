@@ -6,7 +6,7 @@ import json
 import logging
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 import click
@@ -15,7 +15,7 @@ from rich.table import Table
 
 from . import get_version
 from .core import ImageIOError, MeshLoadError, TextureAssignmentError, UDIMError
-from .bake import BakeOptions, resolve_material_textures
+from .bake import BakeOptions, export_sidecars, resolve_material_textures
 from .inspect import _ensure_pyassimp_dependencies, inspect_mesh, run_inspect
 
 
@@ -68,6 +68,7 @@ def _parse_material_override(value: str) -> Tuple[str, str]:
         )
 
     return key, pattern
+
 
 @click.group()
 @click.option("--verbose", is_flag=True, help="Enable verbose logging output")
@@ -220,6 +221,11 @@ def inspect_command(
 )
 @click.option("--validate-only", is_flag=True, help="Only validate texture assignments")
 @click.option(
+    "--export-sidecars", "export_sidecars_flag", is_flag=True, help="Write chart masks and tables"
+)
+@click.option("--deterministic", is_flag=True, help="Force deterministic processing order")
+@click.option(
+
     "--inspect-json",
     type=click.Path(path_type=Path),
     help="Write validation report to this JSON file.",
@@ -241,6 +247,9 @@ def bake_command(
     y_is_down: bool,
     normalization: str,
     validate_only: bool,
+    export_sidecars_flag: bool,
+    deterministic: bool,
+
     inspect_json: Path | None,
     loader: str,
 ) -> None:
@@ -268,6 +277,9 @@ def bake_command(
         y_is_down=y_is_down,
         normalization=normalization,
         loader=loader,
+        export_sidecars=export_sidecars_flag,
+        deterministic=deterministic,
+
     )
     ctx.obj = ctx.obj or {}
     if isinstance(ctx.obj, dict):
@@ -302,7 +314,23 @@ def bake_command(
             }
         )
 
+    sidecar_paths: List[Path] = []
+    if export_sidecars_flag and not missing_materials:
+        try:
+            sidecar_paths = export_sidecars(
+                mesh_info,
+                uv_set_name,
+                assignments,
+                deterministic=deterministic,
+                y_is_down=y_is_down,
+            )
+        except (TextureAssignmentError, ImageIOError) as exc:
+            raise click.ClickException(str(exc)) from exc
+
     report = {"mesh": str(mesh_path), "uv_set": uv_set_name, "materials": materials_report}
+    if sidecar_paths:
+        report["sidecars"] = [str(path) for path in sidecar_paths]
+
 
     click.echo(json.dumps(report, indent=2))
 

@@ -8,11 +8,19 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional
+
+import numpy as np
 
 from .core import ImageIOError, UDIMError
 
-__all__ = ["TextureInfo", "load_texture_info", "expand_udim_pattern"]
+__all__ = [
+    "TextureInfo",
+    "load_texture_info",
+    "expand_udim_pattern",
+    "write_exr_channels",
+]
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -148,3 +156,55 @@ def _ensure_system_site_packages() -> None:
     system_site_str = str(system_site)
     if system_site.exists() and system_site_str not in sys.path:
         sys.path.append(system_site_str)
+
+
+def write_exr_channels(path: Path, channels: Mapping[str, np.ndarray]) -> None:
+    """Write an EXR file with the given ``channels`` using OpenImageIO."""
+
+    if not channels:
+        raise ImageIOError("No channels provided for EXR output")
+
+    arrays = []
+    channel_names: list[str] = []
+
+    for name, data in channels.items():
+        array = np.asarray(data, dtype=np.float32)
+        if array.ndim == 2:
+            pass
+        elif array.ndim == 3 and array.shape[2] == 1:
+            array = array[:, :, 0]
+        else:
+            raise ImageIOError(f"Channel '{name}' must be 2D; received shape {array.shape}")
+
+        arrays.append(array)
+        channel_names.append(str(name))
+
+    height, width = arrays[0].shape
+    for array in arrays[1:]:
+        if array.shape != (height, width):
+            raise ImageIOError("All channels must share the same resolution")
+
+    stacked = np.stack(arrays, axis=2)
+
+    _ensure_system_site_packages()
+    try:
+        import OpenImageIO as oiio
+    except ImportError as exc:  # pragma: no cover - environment specific
+        raise ImageIOError("OpenImageIO is required for writing EXR files") from exc
+
+    output = oiio.ImageOutput.create(str(path))
+    if output is None:  # pragma: no cover - depends on oiio availability
+        raise ImageIOError(f"Failed to create image writer for '{path}': {oiio.geterror()}")
+
+    try:
+        spec = oiio.ImageSpec(width, height, len(channel_names), oiio.FLOAT)
+        spec.channelnames = channel_names
+        if not output.open(str(path), spec):
+            raise ImageIOError(f"Failed to open '{path}' for writing: {output.geterror()}")
+
+        data = np.ascontiguousarray(stacked, dtype=np.float32)
+        if not output.write_image(data):
+            raise ImageIOError(f"Failed to write image '{path}': {output.geterror()}")
+    finally:
+        output.close()
+
