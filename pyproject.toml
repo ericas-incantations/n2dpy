@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=66", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "normal2disp"
+version = "0.1.0"
+description = "Tangent-space normal map to displacement converter."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+n2d = "normal2disp.n2d.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["normal2disp*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+addopts = "-q"
