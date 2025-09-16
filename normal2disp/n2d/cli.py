@@ -8,6 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+
 import click
 from rich.console import Console
 from rich.table import Table
@@ -16,6 +17,7 @@ from . import get_version
 from .core import ImageIOError, MeshLoadError, TextureAssignmentError, UDIMError
 from .bake import BakeOptions, export_sidecars, resolve_material_textures
 from .inspect import _ensure_pyassimp_dependencies, inspect_mesh, run_inspect
+
 
 __all__ = ["main"]
 
@@ -30,6 +32,7 @@ def _configure_logging(verbose: bool) -> None:
 
 def _probe_module(module_name: str) -> Tuple[bool, str | None]:
     if module_name in {"pyassimp", "OpenImageIO"}:
+
         try:
             _ensure_pyassimp_dependencies()
         except MeshLoadError:
@@ -119,6 +122,7 @@ def inspect_command(
 
     try:
         report = run_inspect(mesh_path, loader=loader)
+
     except MeshLoadError as exc:
         raise click.ClickException(str(exc)) from exc
     except Exception as exc:  # pragma: no cover - safeguard
@@ -163,6 +167,7 @@ def inspect_command(
 
         row_count = 0
         material_row_count = 0
+
         for uv_name in sorted(uv_sets):
             for chart in uv_sets[uv_name].get("charts", []):
                 row_count += 1
@@ -186,6 +191,7 @@ def inspect_command(
             console.print(chart_table)
         if material_row_count:
             console.print(material_table)
+
 
     if inspect_json is not None:
         inspect_json.parent.mkdir(parents=True, exist_ok=True)
@@ -219,6 +225,7 @@ def inspect_command(
 )
 @click.option("--deterministic", is_flag=True, help="Force deterministic processing order")
 @click.option(
+
     "--inspect-json",
     type=click.Path(path_type=Path),
     help="Write validation report to this JSON file.",
@@ -242,6 +249,7 @@ def bake_command(
     validate_only: bool,
     export_sidecars_flag: bool,
     deterministic: bool,
+
     inspect_json: Path | None,
     loader: str,
 ) -> None:
@@ -271,6 +279,7 @@ def bake_command(
         loader=loader,
         export_sidecars=export_sidecars_flag,
         deterministic=deterministic,
+
     )
     ctx.obj = ctx.obj or {}
     if isinstance(ctx.obj, dict):
@@ -322,6 +331,7 @@ def bake_command(
     if sidecar_paths:
         report["sidecars"] = [str(path) for path in sidecar_paths]
 
+
     click.echo(json.dumps(report, indent=2))
 
     if inspect_json is not None:
@@ -340,3 +350,4 @@ def bake_command(
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()
+

@@ -226,3 +226,4 @@ def _compute_boundary_mask(mask: np.ndarray) -> np.ndarray:
     boundary[1:, :][diff] = 1
 
     return boundary
+

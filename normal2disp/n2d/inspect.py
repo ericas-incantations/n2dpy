@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
 
+
 import numpy as np
 
 from .core import MeshLoadError
@@ -23,6 +24,7 @@ __all__ = [
     "ChartInfo",
     "UVSetMeshData",
 ]
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ class UVSetMeshData:
 
 
 @dataclass(frozen=True, eq=False)
+
 class UVSetInfo:
     """Aggregated information about a UV set."""
 
@@ -69,6 +72,7 @@ class UVSetInfo:
 
 
 @dataclass(frozen=True, eq=False)
+
 class MeshInfo:
     """Summary of mesh UV information used by inspection and baking."""
 
@@ -79,6 +83,7 @@ class MeshInfo:
 
 def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
     """Load ``mesh_path`` and compute inspection metadata."""
+
 
     resolved_path = mesh_path.expanduser().resolve()
     loader_choice = loader.lower()
@@ -117,6 +122,7 @@ def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
             mesh_info = MeshInfo(path=resolved_path, materials=materials, uv_sets=uv_infos)
             _LOGGER.debug("Mesh info generated: %s", mesh_info)
             return mesh_info
+
     except pyassimp_errors.AssimpError as exc:  # pragma: no cover - depends on asset
         raise MeshLoadError(f"Failed to load mesh '{resolved_path}': {exc}") from exc
 
@@ -309,6 +315,7 @@ def _analyse_uv_set(
     *,
     uv_set_name: str,
 ) -> UVSetInfo:
+
     if uv_coords.shape[0] != vertices.shape[0]:
         raise MeshLoadError(
             f"UV set '{uv_set_name}' has {uv_coords.shape[0]} coordinates for {vertices.shape[0]} vertices"
@@ -323,6 +330,7 @@ def _analyse_uv_set(
 
     faces_subset = faces[valid_faces_mask]
     face_materials_subset = face_materials[valid_faces_mask]
+
     adjacency = _build_uv_adjacency(faces_subset, uv, eps=_UV_EPSILON)
     islands = _connected_components(adjacency)
 
@@ -337,6 +345,7 @@ def _analyse_uv_set(
     face_udims = [_collect_face_udims(face, vertex_udims) for face in faces_subset]
 
     charts, chart_faces = _build_charts(
+
         faces_subset,
         islands,
         uv,
@@ -366,6 +375,7 @@ def _analyse_uv_set(
         face_udims=tuple(face_udims),
     )
 
+
     return UVSetInfo(
         name=uv_set_name,
         charts=charts,
@@ -373,6 +383,7 @@ def _analyse_uv_set(
         per_material_udims=per_material_udims,
         mesh_data=mesh_data,
     )
+
 
 
 def _ensure_pyassimp_dependencies() -> None:
@@ -482,6 +493,7 @@ def _build_charts(
     for chart_id, island in enumerate(islands, start=1):
         face_indices = np.array(island, dtype=int)
         chart_faces[chart_id] = face_indices
+
         island_faces = faces[face_indices]
         vertex_indices = np.unique(island_faces.reshape(-1))
         uv_coords = uv[vertex_indices]
@@ -492,6 +504,7 @@ def _build_charts(
             bbox_min = uv_valid.min(axis=0)
             bbox_max = uv_valid.max(axis=0)
             bbox_uv = (
+
                 float(bbox_min[0]),
                 float(bbox_min[1]),
                 float(bbox_max[0]),
@@ -499,6 +512,7 @@ def _build_charts(
             )
         else:
             bbox_uv = (0.0, 0.0, 0.0, 0.0)
+
 
         orientation_values = orientation[face_indices]
         neg_count = int(np.sum(orientation_values < 0))
@@ -542,6 +556,7 @@ def _build_charts(
         )
 
     return charts, chart_faces
+
 
 
 def _determine_mirror_axis(
@@ -616,6 +631,7 @@ def _collect_face_udims(face: np.ndarray, vertex_udims: np.ndarray) -> Set[int]:
     return tiles
 
 
+
 def _compute_udims(uv: np.ndarray, vertex_indices: np.ndarray) -> List[int]:
     if vertex_indices.size == 0:
         return []
@@ -655,3 +671,4 @@ def _uv_points_close(p: np.ndarray, q: np.ndarray, eps: float) -> bool:
 
 def _vector_valid(vec: np.ndarray, eps: float = _VECTOR_EPSILON) -> bool:
     return bool(np.linalg.norm(vec) > eps)
+

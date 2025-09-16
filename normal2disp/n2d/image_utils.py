@@ -21,6 +21,7 @@ __all__ = [
     "write_exr_channels",
 ]
 
+
 _LOGGER = logging.getLogger(__name__)
 
 _UDIM_TOKEN = "<UDIM>"
@@ -206,3 +207,4 @@ def write_exr_channels(path: Path, channels: Mapping[str, np.ndarray]) -> None:
             raise ImageIOError(f"Failed to write image '{path}': {output.geterror()}")
     finally:
         output.close()
+

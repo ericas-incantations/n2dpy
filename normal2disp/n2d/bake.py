@@ -13,6 +13,7 @@ from .image_utils import expand_udim_pattern, load_texture_info, write_exr_chann
 from .inspect import MeshInfo, UVSetInfo
 from .uv_raster import TileRasterResult, rasterize_uv_charts
 
+
 NormalizationMode = Literal["auto", "xyz", "xy", "none"]
 LoaderMode = Literal["auto", "pyassimp", "blender"]
 
@@ -225,3 +226,4 @@ def _build_chart_table_payload(
         "charts": charts_payload,
         "y_channel": y_channel,
     }
+

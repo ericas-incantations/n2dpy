@@ -9,6 +9,7 @@ from .helpers import write_dummy_png, write_two_island_asset
 def test_inspect_cli_reports_mirroring(tmp_path: Path) -> None:
     obj_path = write_two_island_asset(tmp_path)
 
+
     json_path = tmp_path / "report.json"
     cmd = [
         sys.executable,
@@ -58,6 +59,7 @@ def test_bake_validate_only_reports_missing_tiles(tmp_path: Path) -> None:
     texture_dir.mkdir()
     write_dummy_png(texture_dir / "normal_1001.png")
 
+
     cmd = [
         sys.executable,
         "-m",
@@ -87,6 +89,7 @@ def test_bake_validate_only_with_overrides_succeeds(tmp_path: Path) -> None:
     write_dummy_png(texture_dir / "normal_1001.png")
     write_dummy_png(texture_dir / "other_1002.png")
 
+
     cmd = [
         sys.executable,
         "-m",
@@ -110,3 +113,4 @@ def test_bake_validate_only_with_overrides_succeeds(tmp_path: Path) -> None:
     assert materials["matB"]["tiles_found"] == [1002]
     assert materials["matA"]["missing_tiles"] == []
     assert materials["matB"]["missing_tiles"] == []
+
