@@ -1,0 +1,18 @@
+# Core numeric
+numpy==2.1.1
+scipy==1.14.1
+
+# Imaging and rasterization (use OpenCV for fast polygon fills)
+opencv-python-headless==4.10.0.84
+
+# Mesh analysis
+trimesh==4.4.9
+
+# CLI and UX
+click==8.1.7
+rich==13.7.1
+
+# Dev (let Codex lint/format if configured)
+black==24.8.0
+ruff==0.6.9
+pytest==8.3.3
