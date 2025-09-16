@@ -1,12 +1,21 @@
 import json
+import base64
+
 import subprocess
 import sys
 from pathlib import Path
 
 
-def _write_two_island_obj(path: Path) -> None:
+_DUMMY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9YfD+VsAAAAASUVORK5CYII="
+)
+
+
+def _write_two_island_asset(directory: Path) -> Path:
     obj_data = """\
 o TwoIslands
+mtllib two_islands.mtl
+
 v 0 0 0
 v 1 0 0
 v 1 1 0
@@ -15,25 +24,41 @@ v 2 0 0
 v 3 0 0
 v 3 1 0
 v 2 1 0
-vt 0 0
-vt 1 0
-vt 1 1
-vt 0 1
-vt 1 0
-vt 0 0
-vt 0 1
-vt 1 1
+vt 0.05 0.05
+vt 0.95 0.05
+vt 0.95 0.95
+vt 0.05 0.95
+vt 1.95 0.05
+vt 1.05 0.05
+vt 1.95 0.95
+vt 1.05 0.95
+usemtl matA
 f 1/1 2/2 3/3
 f 1/1 3/3 4/4
+usemtl matB
 f 5/5 6/6 7/7
 f 5/5 7/7 8/8
 """
-    path.write_text(obj_data, encoding="utf-8")
+    mtl_data = """\
+newmtl matA
+Kd 1.0 0.0 0.0
+newmtl matB
+Kd 0.0 1.0 0.0
+"""
+
+    obj_path = directory / "two_islands.obj"
+    (directory / "two_islands.mtl").write_text(mtl_data, encoding="utf-8")
+    obj_path.write_text(obj_data, encoding="utf-8")
+    return obj_path
+
+
+def _write_dummy_png(path: Path) -> None:
+    path.write_bytes(_DUMMY_PNG)
 
 
 def test_inspect_cli_reports_mirroring(tmp_path: Path) -> None:
-    obj_path = tmp_path / "two_islands.obj"
-    _write_two_island_obj(obj_path)
+    obj_path = _write_two_island_asset(tmp_path)
+
 
     json_path = tmp_path / "report.json"
     cmd = [
@@ -60,6 +85,8 @@ def test_inspect_cli_reports_mirroring(tmp_path: Path) -> None:
     uv_info = uv_sets[first_uv_name]
     assert uv_info["chart_count"] >= 2
     assert uv_info["udims"]
+    assert report.get("materials")
+
 
     mirrored_charts = [chart for chart in uv_info["charts"] if chart["mirrored"]]
     assert mirrored_charts, "expected at least one mirrored chart"
@@ -67,6 +94,72 @@ def test_inspect_cli_reports_mirroring(tmp_path: Path) -> None:
     for chart in mirrored_charts:
         flip_flags = [bool(chart["flip_u"]), bool(chart["flip_v"])]
         assert sum(flip_flags) == 1
+        assert "material_id" in chart
+        assert chart.get("material_name") in {"matA", "matB"}
 
     non_mirrored = [chart for chart in uv_info["charts"] if not chart["mirrored"]]
     assert non_mirrored, "expected at least one non-mirrored chart"
+
+    chart_materials = {chart["material_name"] for chart in uv_info["charts"]}
+    assert {"matA", "matB"}.issubset(chart_materials)
+
+
+def test_bake_validate_only_reports_missing_tiles(tmp_path: Path) -> None:
+    obj_path = _write_two_island_asset(tmp_path)
+    texture_dir = tmp_path / "textures"
+    texture_dir.mkdir()
+    _write_dummy_png(texture_dir / "normal_1001.png")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "normal2disp.n2d.cli",
+        "bake",
+        str(obj_path),
+        "--validate-only",
+        "--uv-set",
+        "UV0",
+        "--normal",
+        str(texture_dir / "normal_<UDIM>.png"),
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode != 0
+
+    report = json.loads(result.stdout)
+    materials = {material["name"]: material for material in report["materials"]}
+    assert materials["matA"]["missing_tiles"] == []
+    assert materials["matB"]["missing_tiles"] == [1002]
+
+
+def test_bake_validate_only_with_overrides_succeeds(tmp_path: Path) -> None:
+    obj_path = _write_two_island_asset(tmp_path)
+    texture_dir = tmp_path / "textures"
+    texture_dir.mkdir()
+    _write_dummy_png(texture_dir / "normal_1001.png")
+    _write_dummy_png(texture_dir / "other_1002.png")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "normal2disp.n2d.cli",
+        "bake",
+        str(obj_path),
+        "--validate-only",
+        "--uv-set",
+        "UV0",
+        "--mat-normal",
+        f"matA={texture_dir / 'normal_<UDIM>.png'}",
+        "--mat-normal",
+        f"matB={texture_dir / 'other_<UDIM>.png'}",
+    ]
+
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+    report = json.loads(result.stdout)
+    materials = {material["name"]: material for material in report["materials"]}
+    assert materials["matA"]["tiles_found"] == [1001]
+    assert materials["matB"]["tiles_found"] == [1002]
+    assert materials["matA"]["missing_tiles"] == []
+    assert materials["matB"]["missing_tiles"] == []
+
