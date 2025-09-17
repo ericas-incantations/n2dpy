@@ -327,9 +327,4 @@ def bake(
 * **Output**: EXR written with metadata (`space`, `units`, `amplitude`, `SourceMesh`).
 * **API**: `bake()` signature and sidecar schemas stable for GUI adoption.
 
----
 
-## 13) Future GUI Notes
-
-* The GUI will call `n2d.bake()` and consume sidecars for overlays (chart masks, bbox). Keep options in `BakeOptions` stable. Provide `on_progress` callback for live status.
-* Keep all state local to the function to stay thread/process safe. Avoid globals.
