@@ -14,8 +14,8 @@ from rich.console import Console
 from rich.table import Table
 
 from . import get_version
-from .core import ImageIOError, MeshLoadError, TextureAssignmentError, UDIMError
-from .bake import BakeOptions, export_sidecars, resolve_material_textures
+from .core import ImageIOError, MeshLoadError, SolverError, TextureAssignmentError, UDIMError
+from .bake import BakeOptions, bake, resolve_material_textures
 from .inspect import _ensure_pyassimp_dependencies, inspect_mesh, run_inspect
 
 
@@ -192,7 +192,6 @@ def inspect_command(
         if material_row_count:
             console.print(material_table)
 
-
     if inspect_json is not None:
         inspect_json.parent.mkdir(parents=True, exist_ok=True)
         with inspect_json.open("w", encoding="utf-8") as handle:
@@ -204,6 +203,7 @@ def inspect_command(
 @main.command(name="bake")
 @click.argument("mesh_path", type=click.Path(path_type=Path, exists=True, dir_okay=False))
 @click.option("--normal", "default_normal", type=str, help="Default normal map pattern")
+@click.option("--out", "output_pattern", type=str, help="Output EXR path or UDIM pattern")
 @click.option(
     "--mat-normal",
     "material_normals",
@@ -219,13 +219,40 @@ def inspect_command(
     show_default=True,
     help="Normal map normalization policy",
 )
+@click.option(
+    "--max-slope",
+    type=float,
+    default=10.0,
+    show_default=True,
+    help="Clamp normals to this maximum slope",
+)
+@click.option(
+    "--amplitude",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Scale factor applied before writing displacement",
+)
+@click.option(
+    "--cg-tol",
+    type=float,
+    default=1e-6,
+    show_default=True,
+    help="Conjugate gradient convergence tolerance",
+)
+@click.option(
+    "--cg-maxiter",
+    type=int,
+    default=10000,
+    show_default=True,
+    help="Maximum conjugate gradient iterations",
+)
 @click.option("--validate-only", is_flag=True, help="Only validate texture assignments")
 @click.option(
     "--export-sidecars", "export_sidecars_flag", is_flag=True, help="Write chart masks and tables"
 )
 @click.option("--deterministic", is_flag=True, help="Force deterministic processing order")
 @click.option(
-
     "--inspect-json",
     type=click.Path(path_type=Path),
     help="Write validation report to this JSON file.",
@@ -242,14 +269,18 @@ def bake_command(
     ctx: click.Context,
     mesh_path: Path,
     default_normal: str | None,
+    output_pattern: str | None,
     material_normals: Tuple[str, ...],
     uv_set: str | None,
     y_is_down: bool,
     normalization: str,
+    max_slope: float,
+    amplitude: float,
+    cg_tol: float,
+    cg_maxiter: int,
     validate_only: bool,
     export_sidecars_flag: bool,
     deterministic: bool,
-
     inspect_json: Path | None,
     loader: str,
 ) -> None:
@@ -272,28 +303,12 @@ def bake_command(
         else:
             raise click.ClickException("Mesh does not contain any UV sets")
 
-    options = BakeOptions(
-        uv_set=uv_set_name,
-        y_is_down=y_is_down,
-        normalization=normalization,
-        loader=loader,
-        export_sidecars=export_sidecars_flag,
-        deterministic=deterministic,
-
-    )
-    ctx.obj = ctx.obj or {}
-    if isinstance(ctx.obj, dict):
-        ctx.obj["bake_options"] = options
-
-    if not validate_only:
-        raise click.ClickException("Only --validate-only mode is supported in this phase")
-
     try:
         assignments = resolve_material_textures(mesh_info, uv_set_name, default_normal, overrides)
     except (TextureAssignmentError, ImageIOError, UDIMError) as exc:
         raise click.ClickException(str(exc)) from exc
 
-    materials_report = []
+    materials_report: List[Dict[str, object]] = []
     missing_materials: Dict[int, Dict[str, object]] = {}
     for material_id, data in sorted(assignments.items()):
         tiles_found = sorted(int(tile) for tile in data["tiles_found"])
@@ -314,23 +329,63 @@ def bake_command(
             }
         )
 
-    sidecar_paths: List[Path] = []
-    if export_sidecars_flag and not missing_materials:
-        try:
-            sidecar_paths = export_sidecars(
-                mesh_info,
-                uv_set_name,
-                assignments,
-                deterministic=deterministic,
-                y_is_down=y_is_down,
-            )
-        except (TextureAssignmentError, ImageIOError) as exc:
-            raise click.ClickException(str(exc)) from exc
+    options = BakeOptions(
+        uv_set=uv_set_name,
+        y_is_down=y_is_down,
+        normalization=normalization,
+        max_slope=max_slope,
+        amplitude=amplitude,
+        cg_tol=cg_tol,
+        cg_maxiter=cg_maxiter,
+        deterministic=deterministic,
+        loader=loader,
+        export_sidecars=export_sidecars_flag,
+        material_overrides=overrides,
+        validate_only=validate_only,
+        mesh_info=mesh_info,
+        resolved_assignments=assignments,
+    )
 
-    report = {"mesh": str(mesh_path), "uv_set": uv_set_name, "materials": materials_report}
+    ctx.obj = ctx.obj or {}
+    if isinstance(ctx.obj, dict):
+        ctx.obj["bake_options"] = options
+
+    outputs: List[Path] = []
+    log_lines: List[str] = []
+    sidecar_paths: List[Path] = []
+    error: Exception | None = None
+
+    if missing_materials:
+        summary = ", ".join(
+            f"{material_id} ({assignments[material_id]['material_name']}): "
+            f"{sorted(assignments[material_id]['missing_tiles'])}"
+            for material_id in sorted(missing_materials)
+        )
+        error = TextureAssignmentError(f"Missing UDIM tiles detected: {summary}")
+    elif not validate_only and not output_pattern:
+        error = TextureAssignmentError("--out is required unless --validate-only is used")
+    else:
+        try:
+            outputs, log_lines, sidecar_paths = bake(
+                mesh_path,
+                default_normal,
+                output_pattern or "",
+                options,
+            )
+        except (TextureAssignmentError, ImageIOError, UDIMError, SolverError) as exc:
+            error = exc
+
+    report: Dict[str, object] = {
+        "mesh": str(mesh_path),
+        "uv_set": uv_set_name,
+        "materials": materials_report,
+    }
+    if outputs:
+        report["outputs"] = [str(path) for path in outputs]
     if sidecar_paths:
         report["sidecars"] = [str(path) for path in sidecar_paths]
-
+    if log_lines:
+        report["log"] = log_lines
 
     click.echo(json.dumps(report, indent=2))
 
@@ -340,14 +395,9 @@ def bake_command(
             json.dump(report, handle, indent=2)
             handle.write("\n")
 
-    if missing_materials:
-        summary = ", ".join(
-            f"{material_id} ({assignments[material_id]['material_name']}): {sorted(assignments[material_id]['missing_tiles'])}"
-            for material_id in sorted(missing_materials)
-        )
-        raise click.ClickException(f"Missing UDIM tiles detected: {summary}")
+    if error is not None:
+        raise click.ClickException(str(error)) from error
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
     main()
-

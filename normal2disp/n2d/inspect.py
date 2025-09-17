@@ -5,9 +5,11 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
-from pathlib import Path
+import sysconfig
+import types
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
 
 
@@ -60,7 +62,6 @@ class UVSetMeshData:
 
 
 @dataclass(frozen=True, eq=False)
-
 class UVSetInfo:
     """Aggregated information about a UV set."""
 
@@ -72,7 +73,6 @@ class UVSetInfo:
 
 
 @dataclass(frozen=True, eq=False)
-
 class MeshInfo:
     """Summary of mesh UV information used by inspection and baking."""
 
@@ -84,7 +84,6 @@ class MeshInfo:
 def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
     """Load ``mesh_path`` and compute inspection metadata."""
 
-
     resolved_path = mesh_path.expanduser().resolve()
     loader_choice = loader.lower()
     if loader_choice not in {"auto", "pyassimp"}:
@@ -92,39 +91,54 @@ def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
             f"Unsupported loader '{loader}'. Only 'auto' and 'pyassimp' are available in this phase."
         )
 
-    _ensure_pyassimp_dependencies()
+    use_pyassimp = loader_choice in {"auto", "pyassimp"}
+    assimp_load = None
+    pyassimp_errors = None
 
-    try:
-        from pyassimp import errors as pyassimp_errors
-        from pyassimp import load as assimp_load
-    except ImportError as exc:  # pragma: no cover - handled in runtime
-        raise MeshLoadError("pyassimp is required for mesh inspection") from exc
+    if use_pyassimp:
+        try:
+            _ensure_pyassimp_dependencies()
+            from pyassimp import errors as pyassimp_errors_mod
+            from pyassimp import load as assimp_load_mod
 
-    try:
-        with assimp_load(str(resolved_path)) as scene:
-            if scene is None or not scene.meshes:
-                raise MeshLoadError(f"Mesh '{resolved_path}' does not contain any geometry")
+            assimp_load = assimp_load_mod
+            pyassimp_errors = pyassimp_errors_mod
+        except ImportError:
+            if loader_choice == "pyassimp":
+                raise MeshLoadError("pyassimp is required for mesh inspection")
+            use_pyassimp = False
 
-            materials = _extract_materials(scene)
-            vertices, faces, uv_sets, face_materials = _collect_scene_geometry(scene)
+    if use_pyassimp and assimp_load is not None and pyassimp_errors is not None:
+        try:
+            with assimp_load(str(resolved_path)) as scene:
+                if scene is None or not scene.meshes:
+                    raise MeshLoadError(f"Mesh '{resolved_path}' does not contain any geometry")
 
-            uv_infos: Dict[str, UVSetInfo] = {}
-            for name, uv_coords in uv_sets.items():
-                uv_infos[name] = _analyse_uv_set(
-                    vertices,
-                    faces,
-                    uv_coords,
-                    face_materials,
-                    materials,
-                    uv_set_name=name,
-                )
+                materials = _extract_materials(scene)
+                vertices, faces, uv_sets, face_materials = _collect_scene_geometry(scene)
 
-            mesh_info = MeshInfo(path=resolved_path, materials=materials, uv_sets=uv_infos)
-            _LOGGER.debug("Mesh info generated: %s", mesh_info)
-            return mesh_info
+                uv_infos: Dict[str, UVSetInfo] = {}
+                for name, uv_coords in uv_sets.items():
+                    uv_infos[name] = _analyse_uv_set(
+                        vertices,
+                        faces,
+                        uv_coords,
+                        face_materials,
+                        materials,
+                        uv_set_name=name,
+                    )
 
-    except pyassimp_errors.AssimpError as exc:  # pragma: no cover - depends on asset
-        raise MeshLoadError(f"Failed to load mesh '{resolved_path}': {exc}") from exc
+                mesh_info = MeshInfo(path=resolved_path, materials=materials, uv_sets=uv_infos)
+                _LOGGER.debug("Mesh info generated: %s", mesh_info)
+                return mesh_info
+        except pyassimp_errors.AssimpError as exc:  # pragma: no cover - depends on asset
+            if loader_choice == "pyassimp":
+                raise MeshLoadError(f"Failed to load mesh '{resolved_path}': {exc}") from exc
+            _LOGGER.warning("pyassimp failed to load mesh %s: %s", resolved_path, exc)
+            use_pyassimp = False
+
+    if not use_pyassimp:
+        return _inspect_with_obj_fallback(resolved_path)
 
 
 def run_inspect(mesh_path: Path, loader: str = "auto") -> Dict[str, Any]:
@@ -345,7 +359,6 @@ def _analyse_uv_set(
     face_udims = [_collect_face_udims(face, vertex_udims) for face in faces_subset]
 
     charts, chart_faces = _build_charts(
-
         faces_subset,
         islands,
         uv,
@@ -375,7 +388,6 @@ def _analyse_uv_set(
         face_udims=tuple(face_udims),
     )
 
-
     return UVSetInfo(
         name=uv_set_name,
         charts=charts,
@@ -385,27 +397,176 @@ def _analyse_uv_set(
     )
 
 
-
 def _ensure_pyassimp_dependencies() -> None:
     try:
         import distutils  # type: ignore  # noqa: F401
     except ModuleNotFoundError:
         try:
             distutils_module = importlib.import_module("setuptools._distutils")
-            sys.modules.setdefault("distutils", distutils_module)
-            sys.modules.setdefault(
-                "distutils.sysconfig",
-                importlib.import_module("setuptools._distutils.sysconfig"),
-            )
-        except ModuleNotFoundError as exc:  # pragma: no cover - environment specific
-            raise MeshLoadError(
-                "pyassimp requires setuptools to provide distutils on this Python version"
-            ) from exc
+        except ModuleNotFoundError:
+            _install_distutils_stub()
+            distutils_module = sys.modules["setuptools._distutils"]
+
+        sys.modules.setdefault("distutils", distutils_module)
+        if "distutils.sysconfig" not in sys.modules:
+            try:
+                sys.modules["distutils.sysconfig"] = importlib.import_module(
+                    "setuptools._distutils.sysconfig"
+                )
+            except ModuleNotFoundError:
+                sys.modules["distutils.sysconfig"] = sys.modules["setuptools._distutils.sysconfig"]
 
     system_site = Path("/usr/lib/python3/dist-packages")
     system_site_str = str(system_site)
     if system_site.exists() and system_site_str not in sys.path:
         sys.path.append(system_site_str)
+
+
+def _install_distutils_stub() -> None:
+    """Install a lightweight distutils replacement when setuptools is unavailable."""
+
+    setuptools_module = types.ModuleType("setuptools")
+    setuptools_module.__path__ = []  # type: ignore[attr-defined]
+
+    distutils_module = types.ModuleType("setuptools._distutils")
+    distutils_module.__path__ = []  # type: ignore[attr-defined]
+
+    sysconfig_module = types.ModuleType("setuptools._distutils.sysconfig")
+    sysconfig_module.get_config_var = sysconfig.get_config_var  # type: ignore[attr-defined]
+    sysconfig_module.get_config_vars = sysconfig.get_config_vars  # type: ignore[attr-defined]
+    sysconfig_module.get_paths = sysconfig.get_paths  # type: ignore[attr-defined]
+
+    distutils_module.sysconfig = sysconfig_module  # type: ignore[attr-defined]
+    setuptools_module._distutils = distutils_module  # type: ignore[attr-defined]
+
+    sys.modules.setdefault("setuptools", setuptools_module)
+    sys.modules.setdefault("setuptools._distutils", distutils_module)
+    sys.modules.setdefault("setuptools._distutils.sysconfig", sysconfig_module)
+    sys.modules.setdefault("distutils", distutils_module)
+    sys.modules.setdefault("distutils.sysconfig", sysconfig_module)
+
+
+def _inspect_with_obj_fallback(resolved_path: Path) -> MeshInfo:
+    if resolved_path.suffix.lower() != ".obj":
+        raise MeshLoadError("pyassimp is required for mesh inspection")
+
+    try:
+        (
+            vertices,
+            faces,
+            uv_coords,
+            face_materials,
+            materials,
+        ) = _load_obj_geometry(resolved_path)
+    except OSError as exc:  # pragma: no cover - depends on filesystem
+        raise MeshLoadError(f"Failed to read mesh '{resolved_path}': {exc}") from exc
+
+    uv_set_name = "UV0"
+    uv_info = _analyse_uv_set(
+        vertices,
+        faces,
+        uv_coords,
+        face_materials,
+        materials,
+        uv_set_name=uv_set_name,
+    )
+
+    return MeshInfo(path=resolved_path, materials=materials, uv_sets={uv_set_name: uv_info})
+
+
+def _load_obj_geometry(
+    mesh_path: Path,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[int, str]]:
+    vertices_raw: List[Tuple[float, float, float]] = []
+    texcoords_raw: List[Tuple[float, float]] = []
+    new_vertices: List[Tuple[float, float, float]] = []
+    new_uvs: List[Tuple[float, float]] = []
+    faces: List[List[int]] = []
+    face_materials: List[int] = []
+    vertex_map: Dict[Tuple[int, int], int] = {}
+
+    material_lookup: Dict[str, int] = {}
+    materials: Dict[int, str] = {}
+
+    def _material_id(name: str) -> int:
+        if name not in material_lookup:
+            idx = len(material_lookup)
+            material_lookup[name] = idx
+            materials[idx] = name
+        return material_lookup[name]
+
+    current_material = _material_id("default")
+
+    with mesh_path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+
+            parts = stripped.split()
+            prefix = parts[0]
+            values = parts[1:]
+
+            if prefix == "v" and len(values) >= 3:
+                vertices_raw.append((float(values[0]), float(values[1]), float(values[2])))
+            elif prefix == "vt" and len(values) >= 2:
+                texcoords_raw.append((float(values[0]), float(values[1])))
+            elif prefix.lower() == "usemtl":
+                material_name = " ".join(values).strip() or "default"
+                current_material = _material_id(material_name)
+            elif prefix == "f" and values:
+                if len(values) < 3:
+                    continue
+                indices: List[int] = []
+                for token in values:
+                    v_index, vt_index = _parse_obj_indices(
+                        token, len(vertices_raw), len(texcoords_raw)
+                    )
+                    key = (v_index, vt_index)
+                    mapped = vertex_map.get(key)
+                    if mapped is None:
+                        position = vertices_raw[v_index - 1]
+                        uv = texcoords_raw[vt_index - 1] if vt_index > 0 else (0.0, 0.0)
+                        mapped = len(new_vertices)
+                        vertex_map[key] = mapped
+                        new_vertices.append(position)
+                        new_uvs.append(uv)
+                    indices.append(mapped)
+
+                if len(indices) < 3:
+                    continue
+
+                for i in range(1, len(indices) - 1):
+                    faces.append([indices[0], indices[i], indices[i + 1]])
+                    face_materials.append(current_material)
+
+    if not new_vertices or not faces:
+        raise MeshLoadError(f"Mesh '{mesh_path}' does not contain triangulated geometry")
+
+    vertices = np.asarray(new_vertices, dtype=np.float64)
+    faces_array = np.asarray(faces, dtype=np.int64)
+    uv_coords = np.asarray(new_uvs, dtype=np.float64)
+    face_materials_array = np.asarray(face_materials, dtype=np.int32)
+
+    return vertices, faces_array, uv_coords, face_materials_array, materials
+
+
+def _parse_obj_indices(token: str, vertex_count: int, texcoord_count: int) -> Tuple[int, int]:
+    parts = token.split("/")
+    if not parts or not parts[0]:
+        raise MeshLoadError(f"Invalid face index token '{token}' in OBJ file")
+
+    vertex_index = int(parts[0])
+    if vertex_index < 0:
+        vertex_index = vertex_count + vertex_index + 1
+
+    texcoord_index = 0
+    if len(parts) > 1 and parts[1]:
+        texcoord_index = int(parts[1])
+        if texcoord_index < 0:
+            texcoord_index = texcoord_count + texcoord_index + 1
+
+    return vertex_index, texcoord_index
 
 
 def _build_uv_adjacency(
@@ -504,7 +665,6 @@ def _build_charts(
             bbox_min = uv_valid.min(axis=0)
             bbox_max = uv_valid.max(axis=0)
             bbox_uv = (
-
                 float(bbox_min[0]),
                 float(bbox_min[1]),
                 float(bbox_max[0]),
@@ -513,11 +673,10 @@ def _build_charts(
         else:
             bbox_uv = (0.0, 0.0, 0.0, 0.0)
 
-
         orientation_values = orientation[face_indices]
         neg_count = int(np.sum(orientation_values < 0))
         pos_count = int(np.sum(orientation_values > 0))
-        mirrored = neg_count > pos_count
+        mirrored = neg_count > pos_count or (neg_count > 0 and neg_count == pos_count)
 
         flip_u = False
         flip_v = False
@@ -556,7 +715,6 @@ def _build_charts(
         )
 
     return charts, chart_faces
-
 
 
 def _determine_mirror_axis(
@@ -631,7 +789,6 @@ def _collect_face_udims(face: np.ndarray, vertex_udims: np.ndarray) -> Set[int]:
     return tiles
 
 
-
 def _compute_udims(uv: np.ndarray, vertex_indices: np.ndarray) -> List[int]:
     if vertex_indices.size == 0:
         return []
@@ -671,4 +828,3 @@ def _uv_points_close(p: np.ndarray, q: np.ndarray, eps: float) -> bool:
 
 def _vector_valid(vec: np.ndarray, eps: float = _VECTOR_EPSILON) -> bool:
     return bool(np.linalg.norm(vec) > eps)
-
