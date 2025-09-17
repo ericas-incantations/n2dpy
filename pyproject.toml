@@ -15,7 +15,7 @@ n2d = "normal2disp.n2d.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["normal2disp*"]
+include = ["normal2disp*", "n2d_gui*"]
 
 [tool.black]
 line-length = 100
