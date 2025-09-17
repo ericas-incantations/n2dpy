@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
+from PySide6.QtWidgets import QApplication
 
 from . import qml_path
+from .backend import Backend
 
 __all__ = ["main"]
 
@@ -17,11 +18,14 @@ def main() -> int:
     """Launch the GUI application."""
     QQuickStyle.setStyle("Material")
 
-    app = QGuiApplication(sys.argv)
+    app = QApplication(sys.argv)
     app.setOrganizationName("normal2disp")
     app.setApplicationName("normal2disp GUI")
 
     engine = QQmlApplicationEngine()
+
+    backend = Backend()
+    engine.rootContext().setContextProperty("appBackend", backend)
 
     qml_dir = qml_path()
     engine.addImportPath(str(qml_dir))

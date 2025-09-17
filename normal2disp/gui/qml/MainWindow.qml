@@ -15,6 +15,8 @@ ApplicationWindow {
     minimumWidth: 1024
     minimumHeight: 640
 
+    property var backend: appBackend
+
     Components.Theme { id: theme }
 
     ColumnLayout {
@@ -31,6 +33,7 @@ ApplicationWindow {
             Components.LeftPanel {
                 id: leftPanel
                 theme: theme
+                backend: backend
                 Layout.preferredWidth: 340
                 Layout.maximumWidth: 360
                 Layout.fillHeight: true
@@ -47,6 +50,7 @@ ApplicationWindow {
             Components.RightPane {
                 id: rightPane
                 theme: theme
+                backend: backend
                 Layout.preferredWidth: 320
                 Layout.maximumWidth: 340
                 Layout.fillHeight: true
@@ -56,6 +60,7 @@ ApplicationWindow {
         Components.StatusBar {
             id: statusBar
             theme: theme
+            backend: backend
             Layout.fillWidth: true
             Layout.preferredHeight: 200
         }
