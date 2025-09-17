@@ -19,6 +19,7 @@ __all__ = [
     "load_texture_info",
     "expand_udim_pattern",
     "write_exr_channels",
+    "read_texture_pixels",
 ]
 
 
@@ -158,7 +159,12 @@ def _ensure_system_site_packages() -> None:
         sys.path.append(system_site_str)
 
 
-def write_exr_channels(path: Path, channels: Mapping[str, np.ndarray]) -> None:
+def write_exr_channels(
+    path: Path,
+    channels: Mapping[str, np.ndarray],
+    *,
+    metadata: Optional[Mapping[str, object]] = None,
+) -> None:
     """Write an EXR file with the given ``channels`` using OpenImageIO."""
 
     if not channels:
@@ -199,6 +205,9 @@ def write_exr_channels(path: Path, channels: Mapping[str, np.ndarray]) -> None:
     try:
         spec = oiio.ImageSpec(width, height, len(channel_names), oiio.FLOAT)
         spec.channelnames = channel_names
+        if metadata:
+            for key, value in metadata.items():
+                spec.attribute(str(key), value)
         if not output.open(str(path), spec):
             raise ImageIOError(f"Failed to open '{path}' for writing: {output.geterror()}")
 
@@ -208,3 +217,23 @@ def write_exr_channels(path: Path, channels: Mapping[str, np.ndarray]) -> None:
     finally:
         output.close()
 
+
+def read_texture_pixels(path: Path) -> np.ndarray:
+    """Read image pixels using OpenImageIO as a float32 array."""
+
+    _ensure_system_site_packages()
+    try:
+        import OpenImageIO as oiio
+    except ImportError as exc:  # pragma: no cover - environment specific
+        raise ImageIOError("OpenImageIO is required for texture loading in this phase") from exc
+
+    buf = oiio.ImageBuf(str(path))
+    if not buf.initialized:  # pragma: no cover - defensive
+        raise ImageIOError(f"Failed to open image '{path}'")
+
+    spec = buf.spec()
+    array = np.array(buf.get_pixels(oiio.FLOAT), dtype=np.float32)
+    if array.size != spec.width * spec.height * spec.nchannels:
+        raise ImageIOError(f"Unexpected pixel count when reading '{path}'")
+
+    return array.reshape(spec.height, spec.width, spec.nchannels)

@@ -4,9 +4,11 @@ scipy==1.14.1
 
 # Imaging and rasterization (use OpenCV for fast polygon fills)
 opencv-python-headless==4.10.0.84
+OpenImageIO==3.0.6.1
 
 # Mesh analysis
 trimesh==4.4.9
+pyassimp==5.2.5
 
 # CLI and UX
 click==8.1.7

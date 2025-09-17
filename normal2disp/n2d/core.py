@@ -8,8 +8,8 @@ __all__ = [
     "ImageIOError",
     "UDIMError",
     "TextureAssignmentError",
+    "SolverError",
 ]
-
 
 
 class N2DError(Exception):
@@ -31,3 +31,6 @@ class UDIMError(N2DError):
 class TextureAssignmentError(N2DError):
     """Raised when CLI texture assignment arguments are invalid."""
 
+
+class SolverError(N2DError):
+    """Raised when the Poisson solver fails to converge."""
