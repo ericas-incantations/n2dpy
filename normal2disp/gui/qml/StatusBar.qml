@@ -22,15 +22,31 @@ Item {
             Layout.fillWidth: true
             spacing: theme.spacing
 
-            Label {
-                text: backend ? backend.statusMessage : "Ready"
-                color: theme.textPrimary
-                font.pixelSize: 14
+            ColumnLayout {
+
                 Layout.fillWidth: true
+                spacing: theme.spacing / 4
+
+                Label {
+                    text: backend ? backend.statusMessage : "Ready"
+                    color: theme.textPrimary
+                    font.pixelSize: 14
+                    Layout.fillWidth: true
+                }
+
+                Label {
+                    text: backend ? backend.progressDetail : ""
+                    visible: backend && backend.progressDetail !== ""
+                    color: theme.textSecondary
+                    font.pixelSize: 12
+                    Layout.fillWidth: true
+                }
             }
 
             ProgressBar {
-                value: backend && backend.inspectRunning ? 0.25 : 0.0
+                indeterminate: backend && backend.inspectRunning && !(backend.bakeRunning)
+                value: backend ? backend.progressValue : 0
+
                 from: 0
                 to: 1
                 Layout.preferredWidth: 220
@@ -38,12 +54,21 @@ Item {
 
             Button {
                 text: "Cancel"
-                enabled: backend && backend.inspectRunning
+                enabled: backend && backend.bakeRunning
+                onClicked: if (backend) backend.cancelBake()
+
             }
 
             Button {
                 text: "Open Output"
-                enabled: false
+                enabled: backend && backend.canOpenOutput
+                onClicked: if (backend) backend.openOutputFolder()
+            }
+
+            Button {
+                text: "Reveal EXR"
+                enabled: backend && backend.canRevealLatestOutput
+                onClicked: if (backend) backend.revealLatestOutput()
             }
         }
 

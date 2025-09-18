@@ -9,8 +9,6 @@ Item {
     property var backend
 
 
-    property string outputPath: ""
-
     function cleanPath(url) {
         if (!url) {
             return ""
@@ -131,7 +129,9 @@ Item {
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             color: theme.textSecondary
-                            text: outputPath === "" ? "No output folder selected" : outputPath
+                            text: !backend || backend.outputDirectory === ""
+                                  ? "No output folder selected"
+                                  : backend.outputDirectory
                         }
                     }
                 }
@@ -211,8 +211,8 @@ Item {
                     }
 
                     CheckBox {
+                        id: yDownCheck
                         text: "Y is down"
-                        enabled: false
                         checked: false
                         font.pixelSize: 14
                         Layout.alignment: Qt.AlignLeft
@@ -288,9 +288,41 @@ Item {
                         }
 
                         ComboBox {
+                            id: normalizationCombo
                             Layout.fillWidth: true
                             model: ["Auto", "XYZ", "XY", "None"]
                             currentIndex: 0
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spacing
+
+                        Label {
+                            text: "CG Tol"
+                            color: theme.textPrimary
+                        }
+
+                        TextField {
+                            id: cgTolField
+                            text: "1e-6"
+                            Layout.fillWidth: true
+                            placeholderText: "1e-6"
+                            inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhPreferNumbers
+                        }
+
+                        Label {
+                            text: "Max iters"
+                            color: theme.textPrimary
+                        }
+
+                        SpinBox {
+                            id: cgMaxSpin
+                            from: 1
+                            to: 200000
+                            value: 10000
+                            Layout.preferredWidth: 120
                         }
                     }
 
@@ -304,6 +336,7 @@ Item {
                         }
 
                         SpinBox {
+                            id: processSpin
                             from: 0
                             to: 32
                             value: 0
@@ -312,12 +345,14 @@ Item {
                     }
 
                     CheckBox {
+                        id: deterministicCheck
                         text: "Deterministic"
                         checked: false
                         Layout.alignment: Qt.AlignLeft
                     }
 
                     CheckBox {
+                        id: sidecarCheck
                         text: "Export sidecars"
                         checked: false
                         Layout.alignment: Qt.AlignLeft
@@ -335,10 +370,31 @@ Item {
                     }
 
                     Button {
-                        text: "Bake"
+                        text: backend && backend.bakeRunning ? "Baking…" : "Bake"
                         Layout.fillWidth: true
                         highlighted: true
-                        onClicked: console.log("Bake requested (placeholder)")
+                        enabled: backend
+                                  && backend.meshPath !== ""
+                                  && backend.normalPath !== ""
+                                  && backend.outputDirectory !== ""
+                                  && !backend.bakeRunning
+                        onClicked: {
+                            if (!backend) {
+                                return
+                            }
+                            backend.runBake({
+                                "uvSet": uvSetCombo.currentIndex >= 0 ? uvSetCombo.currentText : "",
+                                "yIsDown": yDownCheck.checked,
+                                "normalization": normalizationCombo.currentText,
+                                "amplitude": amplitudeSlider.value,
+                                "maxSlope": slopeSlider.value,
+                                "cgTol": cgTolField.text,
+                                "cgMaxIter": cgMaxSpin.value,
+                                "deterministic": deterministicCheck.checked,
+                                "processes": processSpin.value,
+                                "exportSidecars": sidecarCheck.checked
+                            })
+                        }
                     }
                 }
             }
@@ -361,7 +417,10 @@ Item {
         id: outputDialog
         title: "Select output directory"
         onAccepted: {
-            outputPath = cleanPath(selectedFolder)
+            if (backend) {
+                backend.setOutputDirectory(cleanPath(selectedFolder))
+            }
+
         }
     }
 }

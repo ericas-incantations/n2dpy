@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
-
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog
 
-from .jobs import InspectJob
+from .jobs import BakeJob, InspectJob
 
 if TYPE_CHECKING:
     from .image_provider import N2DImageProvider
@@ -36,7 +36,13 @@ class Backend(QObject):
     normalPreviewPathChanged = Signal()
     normalEnabledChanged = Signal()
     selectedTileChanged = Signal()
-
+    bakeRunningChanged = Signal()
+    progressValueChanged = Signal()
+    progressDetailChanged = Signal()
+    outputDirectoryChanged = Signal()
+    canOpenOutputChanged = Signal()
+    canRevealOutputChanged = Signal()
+    latestOutputPathChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -57,12 +63,28 @@ class Backend(QObject):
         self._normal_enabled = True
         self._selected_tile: Optional[int] = None
         self._pending_tile_selection: Optional[int] = None
+        self._bake_job: Optional[BakeJob] = None
+        self._bake_running = False
+        self._progress_value = 0.0
+        self._progress_total_charts = 0
+        self._progress_finished_charts = 0
+        self._progress_stage_frac = 0.0
+        self._progress_current_tile: Optional[int] = None
+        self._progress_current_chart: Optional[int] = None
+        self._progress_stage_name: str = ""
+        self._progress_last_iter: Optional[tuple[int, float]] = None
+        self._progress_detail: str = ""
+        self._output_directory: str = ""
+        self._latest_outputs: List[str] = []
+        self._latest_sidecars: List[str] = []
+        self._latest_output_path: str = ""
+        self._can_open_output = False
+        self._can_reveal_output = False
 
         self._temp_dir = Path(tempfile.gettempdir()) / "n2d_gui"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         self._temp_mesh_path: Optional[Path] = None
         self._image_provider: Optional[N2DImageProvider] = None
-
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(150)
@@ -143,6 +165,33 @@ class Backend(QObject):
     def selectedTile(self) -> int:
         return int(self._selected_tile) if self._selected_tile is not None else 0
 
+    @Property(bool, notify=bakeRunningChanged)
+    def bakeRunning(self) -> bool:
+        return self._bake_running
+
+    @Property(float, notify=progressValueChanged)
+    def progressValue(self) -> float:
+        return float(self._progress_value)
+
+    @Property(str, notify=progressDetailChanged)
+    def progressDetail(self) -> str:
+        return self._progress_detail
+
+    @Property(str, notify=outputDirectoryChanged)
+    def outputDirectory(self) -> str:
+        return self._output_directory
+
+    @Property(bool, notify=canOpenOutputChanged)
+    def canOpenOutput(self) -> bool:
+        return self._can_open_output
+
+    @Property(bool, notify=canRevealOutputChanged)
+    def canRevealLatestOutput(self) -> bool:
+        return self._can_reveal_output
+
+    @Property(str, notify=latestOutputPathChanged)
+    def latestOutputPath(self) -> str:
+        return self._latest_output_path
 
     # ------------------------------------------------------------------
     # Invokable methods
@@ -189,7 +238,7 @@ class Backend(QObject):
         self._inspect_job.start()
         self._inspect_running = True
         self.inspectRunningChanged.emit()
-        self._poll_timer.start()
+        self._ensure_polling()
         return True
 
     @Slot(str)
@@ -251,16 +300,376 @@ class Backend(QObject):
         self._pending_tile_selection = None
         self._set_selected_tile(tile)
 
+    @Slot(str)
+    def setOutputDirectory(self, directory: str) -> None:
+        """Set the output directory used for baking."""
+
+        normalized = str(Path(directory).expanduser()) if directory else ""
+        if self._output_directory == normalized:
+            return
+
+        self._output_directory = normalized
+        self.outputDirectoryChanged.emit()
+
+    @Slot("QVariant", result=bool)
+    def runBake(self, options: Any) -> bool:
+        """Launch the bake pipeline in the background."""
+
+        if self._bake_running:
+            self._append_log("Bake already running; ignoring new request.")
+            return False
+
+        if not self._mesh_path:
+            self._set_status_message("Select a mesh before starting a bake.")
+            self._append_log("Bake aborted: no mesh selected")
+            return False
+
+        if not self._normal_path:
+            self._set_status_message("Select a normal map before starting a bake.")
+            self._append_log("Bake aborted: no normal map selected")
+            return False
+
+        if not self._output_directory:
+            self._set_status_message("Select an output directory before starting a bake.")
+            self._append_log("Bake aborted: no output directory selected")
+            return False
+
+        if isinstance(options, dict):
+            options_map = dict(options)
+        else:
+            options_map = {}
+
+        output_pattern = self._build_output_pattern(Path(self._output_directory))
+        if not output_pattern:
+            self._set_status_message("Unable to determine an output pattern for the bake.")
+            return False
+
+        uv_set = options_map.get("uvSet")
+        if isinstance(uv_set, str) and not uv_set.strip():
+            uv_set = None
+
+        def _to_float(value: Any, default: float) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _to_int(value: Any, default: int) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        normalization = str(options_map.get("normalization", "auto")).lower()
+        amplitude = max(0.0, min(10.0, _to_float(options_map.get("amplitude"), 1.0)))
+        max_slope = _to_float(options_map.get("maxSlope"), 10.0)
+        cg_tol = _to_float(options_map.get("cgTol"), 1e-6)
+        cg_maxiter = max(1, _to_int(options_map.get("cgMaxIter"), 10000))
+
+        processes_value = options_map.get("processes")
+        if isinstance(processes_value, (int, float)):
+            processes = int(processes_value)
+        else:
+            try:
+                processes = int(str(processes_value)) if processes_value not in (None, "") else None
+            except (TypeError, ValueError):
+                processes = None
+
+        material_overrides: Dict[str, str] = {}
+        raw_overrides = options_map.get("materialOverrides")
+        if isinstance(raw_overrides, dict):
+            for key, value in raw_overrides.items():
+                if value:
+                    material_overrides[str(key)] = str(value)
+
+        options_payload: Dict[str, Any] = {
+            "uv_set": uv_set,
+            "y_is_down": bool(options_map.get("yIsDown")),
+            "normalization": normalization,
+            "max_slope": max_slope,
+            "amplitude": amplitude,
+            "cg_tol": cg_tol,
+            "cg_maxiter": cg_maxiter,
+            "deterministic": bool(options_map.get("deterministic")),
+            "processes": processes,
+            "export_sidecars": bool(options_map.get("exportSidecars")),
+        }
+
+        self._reset_progress_state()
+        self._bake_running = True
+        self.bakeRunningChanged.emit()
+        self._set_status_message("Starting bake…")
+        self._append_log("Starting bake job")
+        self._latest_outputs = []
+        self._latest_sidecars = []
+        self._set_latest_output_path("")
+        self._update_output_actions(False, False)
+
+        self._bake_job = BakeJob(
+            Path(self._mesh_path),
+            self._normal_path or None,
+            output_pattern,
+            options_payload,
+            material_overrides,
+        )
+        self._bake_job.start()
+        self._ensure_polling()
+        return True
+
+    @Slot()
+    def cancelBake(self) -> None:
+        """Request cancellation of the active bake job."""
+
+        if self._bake_job and not self._bake_job.is_finished():
+            self._append_log("Cancel requested")
+            self._set_status_message("Canceling bake…")
+            self._bake_job.cancel()
+
+    @Slot(result=bool)
+    def openOutputFolder(self) -> bool:
+        """Open the bake output directory in the system file browser."""
+
+        if not self._output_directory:
+            return False
+
+        url = QUrl.fromLocalFile(self._output_directory)
+        return bool(QDesktopServices.openUrl(url))
+
+    @Slot(result=bool)
+    def revealLatestOutput(self) -> bool:
+        """Reveal the most recent EXR in the system file browser."""
+
+        if not self._latest_output_path:
+            return False
+
+        url = QUrl.fromLocalFile(self._latest_output_path)
+        return bool(QDesktopServices.openUrl(url))
+
     def register_image_provider(self, provider: "N2DImageProvider") -> None:
         """Register the shared image provider and refresh previews."""
 
         self._image_provider = provider
         self._update_normal_texture()
 
+    def _ensure_polling(self) -> None:
+        if not self._poll_timer.isActive():
+            self._poll_timer.start()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _reset_progress_state(self) -> None:
+        self._progress_total_charts = 0
+        self._progress_finished_charts = 0
+        self._progress_stage_frac = 0.0
+        self._progress_current_tile = None
+        self._progress_current_chart = None
+        self._progress_stage_name = ""
+        self._progress_last_iter = None
+        self._set_progress_value(0.0)
+        self._set_progress_detail("")
+
+    def _set_progress_value(self, value: float) -> None:
+        clamped = max(0.0, min(1.0, float(value)))
+        if abs(clamped - self._progress_value) > 1e-6:
+            self._progress_value = clamped
+            self.progressValueChanged.emit()
+
+    def _set_progress_detail(self, detail: str) -> None:
+        if self._progress_detail != detail:
+            self._progress_detail = detail
+            self.progressDetailChanged.emit()
+
+    def _recalculate_progress(self) -> None:
+        if self._progress_total_charts <= 0:
+            value = 1.0 if self._progress_finished_charts > 0 else 0.0
+        else:
+            value = (
+                self._progress_finished_charts + self._progress_stage_frac
+            ) / float(self._progress_total_charts)
+        self._set_progress_value(value)
+
+    def _update_progress_detail(self) -> None:
+        parts: List[str] = []
+        if self._progress_current_tile is not None:
+            parts.append(f"Tile {self._progress_current_tile}")
+        if self._progress_current_chart is not None:
+            parts.append(f"Chart {self._progress_current_chart}")
+        if self._progress_stage_name:
+            stage_label = self._progress_stage_name.capitalize()
+            if self._progress_stage_name == "solve" and self._progress_last_iter:
+                iterations, residual = self._progress_last_iter
+                stage_label += f" (iter {iterations}, residual {residual:.2e})"
+            parts.append(stage_label)
+        detail = " • ".join(parts)
+        self._set_progress_detail(detail)
+
+    def _set_latest_output_path(self, path: str) -> None:
+        normalized = str(path) if path else ""
+        if self._latest_output_path != normalized:
+            self._latest_output_path = normalized
+            self.latestOutputPathChanged.emit()
+
+    def _update_output_actions(self, open_enabled: bool, reveal_enabled: bool) -> None:
+        if self._can_open_output != open_enabled:
+            self._can_open_output = open_enabled
+            self.canOpenOutputChanged.emit()
+        if self._can_reveal_output != reveal_enabled:
+            self._can_reveal_output = reveal_enabled
+            self.canRevealOutputChanged.emit()
+
+    def _build_output_pattern(self, directory: Path) -> str:
+        if not directory:
+            return ""
+
+        base_name = Path(self._mesh_path).stem or "displacement"
+        multi_tile = len(self._udim_tiles) > 1
+        filename = f"{base_name}_disp_<UDIM>.exr" if multi_tile else f"{base_name}_disp.exr"
+        return str(directory / filename)
+
+    def _handle_bake_event(self, event: Dict[str, Any]) -> None:
+        kind = event.get("kind")
+
+        if kind == "log":
+            level = str(event.get("level", "INFO")).upper()
+            message = str(event.get("message", ""))
+            prefix = f"[{level}] " if level else ""
+            self._append_log(prefix + message)
+            if level == "ERROR":
+                self._set_status_message(message)
+            return
+
+        if kind == "begin_job":
+            self._bake_running = True
+            self.bakeRunningChanged.emit()
+            self._progress_total_charts = max(0, int(event.get("charts_total", 0)))
+            self._progress_finished_charts = 0
+            self._progress_stage_frac = 0.0
+            self._progress_current_tile = None
+            self._progress_current_chart = None
+            self._progress_stage_name = ""
+            self._progress_last_iter = None
+            self._set_progress_value(0.0)
+            self._set_progress_detail("")
+            self._update_output_actions(False, False)
+            self._set_status_message("Baking displacement…")
+            return
+
+        if kind == "begin_tile":
+            tile = int(event.get("tile", 0))
+            self._progress_current_tile = tile
+            self._progress_current_chart = None
+            self._progress_stage_name = ""
+            self._progress_last_iter = None
+            self._update_progress_detail()
+            self._append_log(f"Processing tile {tile}")
+            self._set_status_message(f"Baking tile {tile}…")
+            return
+
+        if kind == "stage":
+            self._progress_current_tile = int(event.get("tile", 0))
+            chart = event.get("chart")
+            self._progress_current_chart = int(chart) if chart is not None else None
+            stage = str(event.get("name", ""))
+            self._progress_stage_name = stage
+            if stage != "solve":
+                self._progress_last_iter = None
+            self._progress_stage_frac = max(0.0, min(1.0, float(event.get("frac", 0.0))))
+            self._update_progress_detail()
+            self._recalculate_progress()
+            if stage:
+                if self._progress_detail:
+                    self._set_status_message(f"Baking — {self._progress_detail}")
+                else:
+                    self._set_status_message(f"Baking — {stage.capitalize()}")
+            return
+
+        if kind == "cg_iter":
+            chart = event.get("chart")
+            self._progress_current_tile = int(event.get("tile", 0))
+            self._progress_current_chart = int(chart) if chart is not None else None
+            iterations = int(event.get("iter", 0))
+            residual = float(event.get("residual", 0.0))
+            self._progress_last_iter = (iterations, residual)
+            self._update_progress_detail()
+            self._recalculate_progress()
+            return
+
+        if kind == "end_chart":
+            chart = event.get("chart")
+            self._progress_current_chart = int(chart) if chart is not None else None
+            self._progress_finished_charts += 1
+            self._progress_stage_frac = 0.0
+            self._progress_stage_name = ""
+            self._progress_last_iter = None
+            self._update_progress_detail()
+            self._recalculate_progress()
+            return
+
+        if kind == "end_tile":
+            tile = int(event.get("tile", 0))
+            self._append_log(f"Finished tile {tile}")
+            return
+
+        if kind == "end_job":
+            self._bake_running = False
+            self.bakeRunningChanged.emit()
+            self._progress_stage_name = ""
+            self._progress_last_iter = None
+            self._update_progress_detail()
+            if not event.get("ok", False):
+                self._update_output_actions(False, False)
+            return
+
+        if kind == "result":
+            if self._bake_job:
+                self._bake_job.cleanup()
+                self._bake_job = None
+
+            if self._bake_running:
+                self._bake_running = False
+                self.bakeRunningChanged.emit()
+
+            ok = bool(event.get("ok"))
+            logs = event.get("logs") or []
+            for line in logs:
+                self._append_log(str(line))
+
+            if ok:
+                outputs = [str(path) for path in event.get("outputs", [])]
+                sidecars = [str(path) for path in event.get("sidecars", [])]
+                latest = event.get("latest_output") or (outputs[-1] if outputs else "")
+                self._latest_outputs = outputs
+                self._latest_sidecars = sidecars
+                self._set_latest_output_path(str(latest) if latest else "")
+
+                output_dir = event.get("output_dir")
+                if output_dir:
+                    normalized_dir = str(Path(output_dir))
+                    if self._output_directory != normalized_dir:
+                        self._output_directory = normalized_dir
+                        self.outputDirectoryChanged.emit()
+
+                count = len(outputs)
+                summary = f"Bake complete — wrote {count} file{'s' if count != 1 else ''}"
+                self._set_status_message(summary)
+                self._progress_finished_charts = self._progress_total_charts
+                self._progress_stage_frac = 0.0
+                self._recalculate_progress()
+                if self._progress_total_charts == 0:
+                    self._set_progress_value(1.0)
+                self._set_progress_detail("Bake complete")
+                self._update_output_actions(bool(self._output_directory), bool(self._latest_output_path))
+            else:
+                error_message = str(event.get("error", "Bake failed"))
+                self._set_status_message(error_message)
+                self._append_log(f"Bake failed: {error_message}")
+                self._update_output_actions(False, False)
+                self._set_latest_output_path("")
+                self._set_progress_detail("Bake failed")
+                self._set_progress_value(0.0)
+
+            return
     def _set_mesh_path(self, mesh_path: str) -> None:
         normalised = str(Path(mesh_path)) if mesh_path else ""
         if self._mesh_path != normalised:
@@ -330,7 +739,6 @@ class Backend(QObject):
         self._pending_tile_selection = None
         self._set_selected_tile(default_tile)
 
-
         material_count = len(self._materials)
         uv_set_count = len(self._uv_sets)
         tile_count = len(self._udim_tiles) if self._udim_tiles else 1
@@ -364,46 +772,59 @@ class Backend(QObject):
         if mesh_path:
             self._load_viewport_mesh(Path(mesh_path))
 
-
     def _poll_job_queue(self) -> None:
-        if not self._inspect_job:
-            self._poll_timer.stop()
-            return
+        active = False
 
-        message = self._inspect_job.poll()
-        if message is None:
-            return
-
-        self._poll_timer.stop()
-        self._inspect_running = False
-        self.inspectRunningChanged.emit()
-
-        try:
-            if message.get("ok"):
-                payload = message.get("data", {})
-                self._set_inspect_data(payload)
+        if self._inspect_job:
+            message = self._inspect_job.poll()
+            if message is None:
+                active = True
             else:
-                error_message = message.get("error", "Inspection failed")
-                self._set_status_message(error_message)
-                self._append_log(f"Inspect failed: {error_message}")
-                traceback_lines = message.get("traceback")
-                if traceback_lines:
-                    self._append_log(traceback_lines)
-                self._materials = []
-                self.materialsChanged.emit()
-                self._uv_sets = []
-                self.uvSetsChanged.emit()
-                self._udim_tiles = []
-                self.udimTilesChanged.emit()
-                self._inspect_summary = ""
-                self.inspectSummaryChanged.emit()
-                self._warning_summary = ""
-                self.warningSummaryChanged.emit()
-                self._set_selected_tile(None)
-                self._set_mesh_source("")
-        finally:
-            self._inspect_job.cleanup()
-            self._inspect_job = None
+                self._inspect_running = False
+                self.inspectRunningChanged.emit()
+
+                try:
+                    if message.get("ok"):
+                        payload = message.get("data", {})
+                        self._set_inspect_data(payload)
+                    else:
+                        error_message = message.get("error", "Inspection failed")
+                        self._set_status_message(error_message)
+                        self._append_log(f"Inspect failed: {error_message}")
+                        traceback_lines = message.get("traceback")
+                        if traceback_lines:
+                            self._append_log(traceback_lines)
+                        self._materials = []
+                        self.materialsChanged.emit()
+                        self._uv_sets = []
+                        self.uvSetsChanged.emit()
+                        self._udim_tiles = []
+                        self.udimTilesChanged.emit()
+                        self._inspect_summary = ""
+                        self.inspectSummaryChanged.emit()
+                        self._warning_summary = ""
+                        self.warningSummaryChanged.emit()
+                        self._set_selected_tile(None)
+                        self._set_mesh_source("")
+                finally:
+                    self._inspect_job.cleanup()
+                    self._inspect_job = None
+
+        if self._bake_job:
+            events = self._bake_job.poll()
+            if events:
+                for event in events:
+                    self._handle_bake_event(event)
+
+            if self._bake_job:
+                if self._bake_job.is_finished() and not events:
+                    self._bake_job.cleanup()
+                    self._bake_job = None
+                else:
+                    active = True
+
+        if not active:
+            self._poll_timer.stop()
 
     def _load_viewport_mesh(self, mesh_path: Path) -> None:
         """Export ``mesh_path`` to GLB for the Quick 3D viewport."""
