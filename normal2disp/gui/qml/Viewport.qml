@@ -40,9 +40,21 @@ Item {
             Model {
                 id: previewModel
                 source: backend && backend.meshSource !== "" ? backend.meshSource : ""
-                materials: [previewMaterial]
+                materials: backend && backend.displacementEnabled ? [displacementMaterial] : [previewMaterial]
                 castsShadows: true
-                visible: backend && backend.meshSource !== ""
+                visible: backend && (
+                             backend.displacementEnabled
+                                 ? backend.displacementGeometry === null
+                                 : backend.meshSource !== ""
+                         )
+            }
+
+            Model {
+                id: displacementModel
+                geometry: backend && backend.displacementGeometry ? backend.displacementGeometry : null
+                materials: [displacementMaterial]
+                castsShadows: true
+                visible: backend && backend.displacementEnabled && backend.displacementGeometry
             }
 
             Model {
@@ -84,8 +96,21 @@ Item {
         roughness: 0.55
         metalness: 0.0
         wireframe: root.wireframe
-        normalMap: backend && backend.normalTextureUrl !== "" ? normalTexture : null
-        normalStrength: backend && backend.normalEnabled ? 1.0 : 0.0
+        normalMap: backend && backend.normalTextureUrl !== "" && !(backend.displacementEnabled) ? normalTexture : null
+        normalStrength: backend
+                        ? (backend.displacementEnabled
+                           ? 0.0
+                           : (backend.normalEnabled ? 1.0 : 0.0))
+                        : 0.0
+    }
+
+    PrincipledMaterial {
+        id: displacementMaterial
+        baseColor: Qt.rgba(0.65, 0.67, 0.72, 1)
+        roughness: 0.55
+        metalness: 0.0
+        wireframe: root.wireframe
+        normalStrength: 0.0
     }
 
     Rectangle {
@@ -98,17 +123,139 @@ Item {
         opacity: 0.9
         border.color: theme.border
 
-        RowLayout {
+        ColumnLayout {
             anchors.fill: parent
             anchors.margins: theme.padding
             spacing: theme.spacing
 
-            CheckBox {
-                id: wireframeToggle
-                text: "Wireframe"
-                checked: root.wireframe
-                onToggled: root.wireframe = checked
+            RowLayout {
+                spacing: theme.spacing
+
+                CheckBox {
+                    id: wireframeToggle
+                    text: "Wireframe"
+                    checked: root.wireframe
+                    onToggled: root.wireframe = checked
+                }
+
+                Item { Layout.fillWidth: true }
+
+                CheckBox {
+                    id: displacementToggle
+                    text: "Displacement preview"
+                    checked: backend && backend.displacementEnabled
+                    enabled: backend && !backend.displacementBusy
+                    onToggled: if (backend) backend.setDisplacementEnabled(checked)
+                }
             }
+
+            RowLayout {
+                spacing: theme.spacing / 2
+                visible: backend && (backend.displacementEnabled || backend.displacementBusy)
+
+                Label {
+                    text: "Subdivision"
+                    color: backend && backend.displacementEnabled ? theme.textPrimary : theme.textSecondary
+                }
+
+                Slider {
+                    id: subdivSlider
+                    from: 0
+                    to: 5
+                    stepSize: 1
+                    snapMode: Slider.SnapAlways
+                    Layout.fillWidth: true
+                    enabled: backend && backend.displacementEnabled && !backend.displacementBusy
+                    onValueChanged: if (backend && pressed) backend.setDisplacementLevel(Math.round(value))
+                }
+
+                Binding {
+                    target: subdivSlider
+                    property: "value"
+                    value: backend ? backend.displacementLevel : 0
+                    when: !subdivSlider.pressed
+                }
+
+                Label {
+                    text: backend ? backend.displacementLevel : 0
+                    horizontalAlignment: Text.AlignHCenter
+                    color: theme.textSecondary
+                    Layout.preferredWidth: 32
+                }
+
+                Button {
+                    id: regenerateButton
+                    text: "Regenerate"
+                    visible: backend && backend.displacementEnabled
+                    enabled: backend && backend.displacementEnabled && backend.displacementDirty && !backend.displacementBusy
+                    onClicked: if (backend) backend.regenerateDisplacement()
+                }
+            }
+
+            RowLayout {
+                spacing: theme.spacing / 2
+                visible: backend && (backend.displacementEnabled || backend.displacementBusy)
+
+                Label {
+                    text: "Preview scale"
+                    color: backend && backend.displacementEnabled ? theme.textPrimary : theme.textSecondary
+                }
+
+                SpinBox {
+                    id: previewScale
+                    from: -10
+                    to: 10
+                    stepSize: 0.1
+                    editable: true
+                    Layout.preferredWidth: 120
+                    enabled: backend && backend.displacementEnabled && !backend.displacementBusy
+                    onValueModified: if (backend) backend.setDisplacementPreviewScale(value)
+                    validator: DoubleValidator {
+                        bottom: -10
+                        top: 10
+                        decimals: 3
+                    }
+                    textFromValue: function(value, locale) { return Number(value).toFixed(2); }
+                    valueFromText: function(text, locale) {
+                        var parsed = parseFloat(text)
+                        return isNaN(parsed) ? previewScale.value : parsed
+                    }
+                }
+
+                Binding {
+                    target: previewScale
+                    property: "value"
+                    value: backend ? backend.displacementPreviewScale : 1.0
+                    when: !previewScale.activeFocus
+                }
+            }
+
+            Label {
+                text: backend ? backend.displacementStatus : ""
+                visible: backend && backend.displacementStatus !== ""
+                color: theme.textSecondary
+                wrapMode: Text.WordWrap
+                Layout.maximumWidth: 280
+            }
+        }
+    }
+
+    Column {
+        anchors.centerIn: view3d
+        spacing: theme.spacing / 2
+        visible: backend && backend.displacementBusy
+
+        BusyIndicator {
+            running: true
+            width: 48
+            height: 48
+        }
+
+        Label {
+            text: backend ? backend.displacementStatus : ""
+            color: theme.textSecondary
+            horizontalAlignment: Text.AlignHCenter
+            font.pixelSize: 12
         }
     }
 }

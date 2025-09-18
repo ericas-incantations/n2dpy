@@ -4,15 +4,40 @@ from __future__ import annotations
 
 import re
 import tempfile
+import threading
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional
 
-from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+import numpy as np
+from PySide6.QtCore import (
+    QByteArray,
+    QMetaObject,
+    QObject,
+    Property,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import QDesktopServices, QVector3D
 from PySide6.QtWidgets import QFileDialog
 
+try:  # pragma: no cover - optional dependency during headless testing
+    from PySide6.QtQuick3D import QQuick3DGeometry
+except ImportError:  # pragma: no cover - Quick3D unavailable in some CI setups
+    QQuick3DGeometry = None  # type: ignore
+
 from .jobs import BakeJob, InspectJob
+from .subdivision import (
+    DisplacementResult,
+    HeightField,
+    LoopSubdivisionCache,
+    MeshBuffers,
+    generate_displacement,
+    load_height_field,
+)
 
 if TYPE_CHECKING:
     from .image_provider import N2DImageProvider
@@ -43,6 +68,14 @@ class Backend(QObject):
     canOpenOutputChanged = Signal()
     canRevealOutputChanged = Signal()
     latestOutputPathChanged = Signal()
+    displacementEnabledChanged = Signal()
+    displacementBusyChanged = Signal()
+    displacementLevelChanged = Signal()
+    displacementPreviewScaleChanged = Signal()
+    displacementDirtyChanged = Signal()
+    displacementStatusChanged = Signal()
+    displacementGeometryChanged = Signal()
+    displacementAmplitudeChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -61,6 +94,7 @@ class Backend(QObject):
         self._normal_texture_url: str = ""
         self._normal_preview_path: str = ""
         self._normal_enabled = True
+        self._normal_enabled_snapshot = True
         self._selected_tile: Optional[int] = None
         self._pending_tile_selection: Optional[int] = None
         self._bake_job: Optional[BakeJob] = None
@@ -80,6 +114,21 @@ class Backend(QObject):
         self._latest_output_path: str = ""
         self._can_open_output = False
         self._can_reveal_output = False
+        self._displacement_enabled = False
+        self._displacement_busy = False
+        self._displacement_level = 0
+        self._displacement_preview_scale = 1.0
+        self._displacement_dirty = False
+        self._displacement_status = ""
+        self._displacement_geometry: Optional[QQuick3DGeometry] = None
+        self._displacement_thread: Optional[threading.Thread] = None
+        self._displacement_request_id = 0
+        self._height_field: Optional[HeightField] = None
+        self._height_cache: Dict[int, np.ndarray] = {}
+        self._subdivision_cache: Optional[LoopSubdivisionCache] = None
+        self._mesh_buffers: Optional[MeshBuffers] = None
+        self._preview_amplitude: Optional[float] = None
+        self._preview_units: Optional[str] = None
 
         self._temp_dir = Path(tempfile.gettempdir()) / "n2d_gui"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
@@ -193,6 +242,43 @@ class Backend(QObject):
     def latestOutputPath(self) -> str:
         return self._latest_output_path
 
+    @Property(bool, notify=displacementEnabledChanged)
+    def displacementEnabled(self) -> bool:
+        return self._displacement_enabled
+
+    @Property(bool, notify=displacementBusyChanged)
+    def displacementBusy(self) -> bool:
+        return self._displacement_busy
+
+    @Property(int, notify=displacementLevelChanged)
+    def displacementLevel(self) -> int:
+        return int(self._displacement_level)
+
+    @Property(bool, notify=displacementDirtyChanged)
+    def displacementDirty(self) -> bool:
+        return self._displacement_dirty
+
+    @Property(float, notify=displacementPreviewScaleChanged)
+    def displacementPreviewScale(self) -> float:
+        return float(self._displacement_preview_scale)
+
+    @Property(str, notify=displacementStatusChanged)
+    def displacementStatus(self) -> str:
+        return self._displacement_status
+
+    @Property("QVariant", notify=displacementGeometryChanged)
+    def displacementGeometry(self) -> Optional[QQuick3DGeometry]:
+        return self._displacement_geometry
+
+    @Property(str, notify=displacementAmplitudeChanged)
+    def displacementAmplitude(self) -> str:
+        if self._preview_amplitude is None:
+            return ""
+        units = self._preview_units or ""
+        if units:
+            return f"Amplitude {self._preview_amplitude:g} ({units})"
+        return f"Amplitude {self._preview_amplitude:g}"
+
     # ------------------------------------------------------------------
     # Invokable methods
     # ------------------------------------------------------------------
@@ -288,6 +374,87 @@ class Backend(QObject):
         state = "enabled" if enabled else "disabled"
         self._set_status_message(f"Normal map preview {state}")
         self._append_log(f"Normal map preview {state}")
+
+    @Slot(bool)
+    def setDisplacementEnabled(self, enabled: bool) -> None:
+        """Toggle displacement preview generation."""
+
+        if enabled == self._displacement_enabled:
+            return
+
+        if enabled:
+            if not self._latest_outputs:
+                message = "Bake a displacement map before enabling the preview."
+                self._set_status_message(message)
+                self._append_log(message)
+                return
+            if self._mesh_buffers is None:
+                message = "Mesh data unavailable for displacement preview."
+                self._set_status_message(message)
+                self._append_log(message)
+                return
+            if not self._ensure_height_field():
+                return
+            if not self._ensure_subdivision_cache():
+                return
+
+            self._displacement_enabled = True
+            self.displacementEnabledChanged.emit()
+            self._normal_enabled_snapshot = self._normal_enabled
+            if self._normal_enabled:
+                self._normal_enabled = False
+                self.normalEnabledChanged.emit()
+            self._append_log("Displacement preview enabled")
+            self._set_status_message("Generating displacement preview…")
+            self._set_displacement_dirty(False)
+            self._start_displacement_job()
+        else:
+            self._disable_displacement()
+
+    @Slot(int)
+    def setDisplacementLevel(self, level: int) -> None:
+        """Set the Loop subdivision level for the displacement preview."""
+
+        clamped = max(0, min(5, int(level)))
+        if clamped == self._displacement_level:
+            return
+
+        self._displacement_level = clamped
+        self.displacementLevelChanged.emit()
+        self._append_log(f"Subdivision level set to {clamped}")
+        if self._displacement_enabled:
+            self._set_displacement_dirty(True)
+            self._set_displacement_status(f"Subdivision {clamped} pending — regenerate to apply")
+
+    @Slot(float)
+    def setDisplacementPreviewScale(self, scale: float) -> None:
+        """Adjust the preview-only height scale multiplier."""
+
+        try:
+            value = float(scale)
+        except (TypeError, ValueError):
+            value = 1.0
+        clamped = max(-10.0, min(10.0, value))
+        if abs(clamped - self._displacement_preview_scale) < 1e-6:
+            return
+
+        self._displacement_preview_scale = clamped
+        self.displacementPreviewScaleChanged.emit()
+        self._append_log(f"Preview scale set to {clamped:g}")
+        if self._displacement_enabled:
+            self._set_displacement_dirty(True)
+            self._set_displacement_status("Preview scale changed — regenerate to apply")
+
+    @Slot()
+    def regenerateDisplacement(self) -> None:
+        """Rebuild the displacement preview with the current settings."""
+
+        if not self._displacement_enabled:
+            self._set_status_message("Enable displacement preview before regenerating.")
+            return
+        self._append_log(f"Regenerating displacement preview at level {self._displacement_level}")
+        self._set_displacement_dirty(False)
+        self._start_displacement_job()
 
     @Slot(int)
     def selectTile(self, tile: int) -> None:
@@ -484,9 +651,9 @@ class Backend(QObject):
         if self._progress_total_charts <= 0:
             value = 1.0 if self._progress_finished_charts > 0 else 0.0
         else:
-            value = (
-                self._progress_finished_charts + self._progress_stage_frac
-            ) / float(self._progress_total_charts)
+            value = (self._progress_finished_charts + self._progress_stage_frac) / float(
+                self._progress_total_charts
+            )
         self._set_progress_value(value)
 
     def _update_progress_detail(self) -> None:
@@ -643,6 +810,11 @@ class Backend(QObject):
                 self._latest_sidecars = sidecars
                 self._set_latest_output_path(str(latest) if latest else "")
 
+                self._reset_displacement_preview(clear_height=True, clear_cache=False)
+                amplitude_text = ""
+                if self._ensure_height_field():
+                    amplitude_text = self.displacementAmplitude
+
                 output_dir = event.get("output_dir")
                 if output_dir:
                     normalized_dir = str(Path(output_dir))
@@ -652,6 +824,8 @@ class Backend(QObject):
 
                 count = len(outputs)
                 summary = f"Bake complete — wrote {count} file{'s' if count != 1 else ''}"
+                if amplitude_text:
+                    summary += f" • {amplitude_text}"
                 self._set_status_message(summary)
                 self._progress_finished_charts = self._progress_total_charts
                 self._progress_stage_frac = 0.0
@@ -659,7 +833,9 @@ class Backend(QObject):
                 if self._progress_total_charts == 0:
                     self._set_progress_value(1.0)
                 self._set_progress_detail("Bake complete")
-                self._update_output_actions(bool(self._output_directory), bool(self._latest_output_path))
+                self._update_output_actions(
+                    bool(self._output_directory), bool(self._latest_output_path)
+                )
             else:
                 error_message = str(event.get("error", "Bake failed"))
                 self._set_status_message(error_message)
@@ -670,9 +846,13 @@ class Backend(QObject):
                 self._set_progress_value(0.0)
 
             return
+
     def _set_mesh_path(self, mesh_path: str) -> None:
         normalised = str(Path(mesh_path)) if mesh_path else ""
         if self._mesh_path != normalised:
+            self._reset_displacement_preview()
+            self._mesh_buffers = None
+            self._subdivision_cache = None
             self._mesh_path = normalised
             self.meshPathChanged.emit()
 
@@ -839,13 +1019,70 @@ class Backend(QObject):
             self._temp_dir.mkdir(parents=True, exist_ok=True)
             temp_path = self._temp_dir / f"inspect_{uuid.uuid4().hex}.glb"
             scene.export(temp_path, file_type="glb")
+
+            if isinstance(scene, trimesh.Scene):
+                mesh = scene.to_mesh()
+            else:
+                mesh = scene
+
+            if not isinstance(mesh, trimesh.Trimesh):
+                raise ValueError("Unsupported mesh format for viewport preview")
+
+            if mesh.faces is None or mesh.faces.size == 0:
+                raise ValueError("Mesh contains no triangles to preview")
+
+            if mesh.faces.ndim != 2 or mesh.faces.shape[1] != 3:
+                mesh = mesh.triangulate()
+
+            positions = np.asarray(mesh.vertices, dtype=np.float64)
+            faces = np.asarray(mesh.faces, dtype=np.int64)
+
+            if positions.size == 0 or faces.size == 0:
+                raise ValueError("Mesh contains no data to preview")
+
+            visual = getattr(mesh, "visual", None)
+            uv_data = getattr(visual, "uv", None) if visual is not None else None
+            if uv_data is None or len(uv_data) == 0:
+                raise ValueError("Mesh is missing UVs required for displacement preview")
+
+            uv_values = np.asarray(uv_data, dtype=np.float64)
+            if uv_values.ndim != 2 or uv_values.shape[1] < 2:
+                raise ValueError("Mesh UVs are malformed for displacement preview")
+
+            if uv_values.shape[0] == positions.shape[0]:
+                uv = uv_values[:, :2]
+            elif uv_values.shape[0] == faces.shape[0] * 3:
+                uv_faces = uv_values.reshape(-1, 3, uv_values.shape[1])[:, :, :2]
+                positions = positions[faces].reshape(-1, 3)
+                uv = uv_faces.reshape(-1, 2)
+                faces = np.arange(positions.shape[0], dtype=np.int64).reshape(-1, 3)
+            else:
+                raise ValueError("Mesh UV layout is incompatible with displacement preview")
+
+            if not np.isfinite(positions).all() or not np.isfinite(uv).all():
+                raise ValueError("Mesh data contains NaN/Inf values")
+
+            mesh_buffers = MeshBuffers(
+                positions=np.ascontiguousarray(positions, dtype=np.float64),
+                uv=np.ascontiguousarray(uv, dtype=np.float64),
+                faces=np.ascontiguousarray(faces, dtype=np.int64),
+            )
         except Exception as exc:  # pragma: no cover - depends on trimesh/asset
+            self._mesh_buffers = None
+            self._reset_displacement_preview(clear_height=False, clear_cache=True)
             self._set_status_message(f"Viewport load failed: {exc}")
             self._append_log(f"Viewport load failed: {exc}")
             self._set_mesh_source("")
             return
 
-        self._append_log(f"Viewport mesh ready: {temp_path.name}")
+        self._mesh_buffers = mesh_buffers
+        self._reset_displacement_preview(clear_height=False, clear_cache=True)
+
+        face_count = int(mesh_buffers.faces.shape[0])
+        vertex_count = int(mesh_buffers.positions.shape[0])
+        self._append_log(
+            f"Viewport mesh ready: {temp_path.name} • {face_count:,} tris / {vertex_count:,} verts"
+        )
         self._set_status_message("Viewport mesh loaded")
         self._set_mesh_source(QUrl.fromLocalFile(str(temp_path)).toString())
         self._cleanup_temp_mesh(keep=temp_path)
@@ -955,3 +1192,222 @@ class Backend(QObject):
             self._normal_preview_path = preview_path
             self.normalPreviewPathChanged.emit()
 
+    def _set_displacement_busy(self, busy: bool) -> None:
+        if self._displacement_busy != busy:
+            self._displacement_busy = busy
+            self.displacementBusyChanged.emit()
+
+    def _set_displacement_dirty(self, dirty: bool) -> None:
+        if self._displacement_dirty != dirty:
+            self._displacement_dirty = dirty
+            self.displacementDirtyChanged.emit()
+
+    def _set_displacement_status(self, message: str) -> None:
+        if self._displacement_status != message:
+            self._displacement_status = message
+            self.displacementStatusChanged.emit()
+
+    def _set_displacement_geometry(self, geometry: Optional[Any]) -> None:
+        if self._displacement_geometry is geometry:
+            return
+        self._displacement_geometry = geometry
+        self.displacementGeometryChanged.emit()
+
+    def _reset_displacement_preview(
+        self,
+        *,
+        clear_height: bool = True,
+        clear_cache: bool = True,
+        clear_geometry: bool = True,
+    ) -> None:
+        self._displacement_request_id += 1
+        self._displacement_thread = None
+        if self._displacement_enabled:
+            self._displacement_enabled = False
+            self.displacementEnabledChanged.emit()
+        self._set_displacement_busy(False)
+        self._set_displacement_dirty(False)
+        self._set_displacement_status("")
+
+        if clear_geometry:
+            self._set_displacement_geometry(None)
+
+        if clear_height:
+            self._height_field = None
+            self._preview_amplitude = None
+            self._preview_units = None
+            self.displacementAmplitudeChanged.emit()
+        if clear_cache:
+            self._subdivision_cache = None
+            self._height_cache.clear()
+
+        if self._normal_preview_path and not self._normal_enabled:
+            self._normal_enabled = True
+            self.normalEnabledChanged.emit()
+
+    def _disable_displacement(self) -> None:
+        if not self._displacement_enabled and not self._displacement_busy:
+            return
+        self._append_log("Displacement preview disabled")
+        self._set_status_message("Displacement preview disabled")
+        self._reset_displacement_preview(clear_height=False, clear_cache=False)
+
+    def _ensure_height_field(self) -> bool:
+        if self._height_field is not None:
+            return True
+        if not self._latest_outputs:
+            return False
+        try:
+            field = load_height_field([Path(path) for path in self._latest_outputs])
+        except HeightFieldError as exc:
+            message = str(exc)
+            self._set_status_message(message)
+            self._append_log(f"Displacement preview failed: {message}")
+            return False
+
+        self._height_field = field
+        self._height_cache.clear()
+        self._preview_amplitude = field.amplitude
+        self._preview_units = field.units
+        self.displacementAmplitudeChanged.emit()
+
+        amplitude_label = self.displacementAmplitude
+        if amplitude_label:
+            self._set_status_message(f"Loaded displacement map — {amplitude_label}")
+        else:
+            self._set_status_message("Loaded displacement map for preview")
+        self._append_log("Displacement height map ready")
+        return True
+
+    def _ensure_subdivision_cache(self) -> bool:
+        if self._mesh_buffers is None:
+            return False
+        if self._subdivision_cache is None:
+            try:
+                self._subdivision_cache = LoopSubdivisionCache(self._mesh_buffers)
+            except Exception as exc:  # pragma: no cover - depends on mesh data
+                message = f"Subdivision preparation failed: {exc}"
+                self._set_status_message(message)
+                self._append_log(message)
+                self._subdivision_cache = None
+                return False
+        return True
+
+    def _start_displacement_job(self) -> None:
+        if not self._displacement_enabled:
+            return
+        if self._displacement_busy:
+            return
+        if not self._ensure_height_field():
+            return
+        if not self._ensure_subdivision_cache():
+            return
+
+        cache = self._subdivision_cache
+        field = self._height_field
+        if cache is None or field is None:
+            return
+
+        level = int(self._displacement_level)
+        scale = float(self._displacement_preview_scale)
+
+        self._set_displacement_busy(True)
+        self._set_displacement_status(f"Subdiv {level} — generating…")
+        self._append_log(f"Generating displacement preview (level {level}, scale {scale:g})")
+
+        request_id = self._displacement_request_id + 1
+        self._displacement_request_id = request_id
+
+        height_cache = self._height_cache
+
+        def worker() -> None:
+            try:
+                result = generate_displacement(
+                    cache,
+                    field,
+                    level,
+                    scale,
+                    precomputed_heights=height_cache,
+                    height_cache=height_cache,
+                )
+            except Exception as exc:  # pragma: no cover - depends on mesh/exr
+                self._invoke_on_main(lambda: self._finalize_displacement_result(request_id, exc))
+            else:
+                self._invoke_on_main(lambda: self._finalize_displacement_result(request_id, result))
+
+        self._displacement_thread = threading.Thread(
+            target=worker,
+            name="n2d_displacement",
+            daemon=True,
+        )
+        self._displacement_thread.start()
+
+    def _finalize_displacement_result(self, request_id: int, result: Any) -> None:
+        if request_id != self._displacement_request_id:
+            return
+
+        self._displacement_thread = None
+        self._set_displacement_busy(False)
+
+        if isinstance(result, DisplacementResult):
+            geometry = self._build_displacement_geometry(result)
+            self._set_displacement_geometry(geometry)
+            summary = (
+                f"Subdiv {result.level} • {result.triangle_count:,} tris "
+                f"• {result.build_ms:.0f} ms build, {result.sample_ms:.0f} ms sample, "
+                f"{result.displace_ms:.0f} ms displace"
+            )
+            self._set_displacement_status(summary)
+            self._set_status_message(summary)
+            self._append_log(summary)
+        else:
+            message = f"Displacement preview failed: {result}"
+            self._set_displacement_status("Preview failed — normal map restored")
+            self._set_status_message(message)
+            self._append_log(message)
+            self._set_displacement_geometry(None)
+            self._reset_displacement_preview(clear_height=False, clear_cache=False)
+
+    def _build_displacement_geometry(self, result: DisplacementResult) -> Optional[Any]:
+        if QQuick3DGeometry is None:  # pragma: no cover - headless testing fallback
+            return None
+
+        geometry = QQuick3DGeometry()
+        geometry.clear()
+        geometry.setPrimitiveType(QQuick3DGeometry.PrimitiveType.Triangles)
+
+        packed = np.concatenate((result.positions, result.normals), axis=1)
+        vertex_bytes = QByteArray(packed.tobytes())
+        geometry.setVertexData(vertex_bytes)
+        stride = 6 * 4
+        geometry.setStride(stride)
+        geometry.setVertexCount(int(result.positions.shape[0]))
+        geometry.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.PositionSemantic,
+            0,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        geometry.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.NormalSemantic,
+            3 * 4,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+
+        indices = np.ascontiguousarray(result.faces.reshape(-1), dtype=np.uint32)
+        geometry.setIndexData(QByteArray(indices.tobytes()))
+        geometry.setIndexStride(4)
+        geometry.setIndexCount(int(indices.size))
+        geometry.setPrimitiveCount(int(result.faces.shape[0]))
+
+        bounds_min = result.positions.min(axis=0)
+        bounds_max = result.positions.max(axis=0)
+        geometry.setBounds(
+            QVector3D(float(bounds_min[0]), float(bounds_min[1]), float(bounds_min[2])),
+            QVector3D(float(bounds_max[0]), float(bounds_max[1]), float(bounds_max[2])),
+        )
+
+        geometry.markAllDirty()
+        return geometry
+
+    def _invoke_on_main(self, func: Callable[[], None]) -> None:
+        QMetaObject.invokeMethod(self, func, Qt.QueuedConnection)
