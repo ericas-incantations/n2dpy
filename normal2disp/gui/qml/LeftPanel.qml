@@ -6,14 +6,9 @@ import QtQuick.Dialogs 1.3
 Item {
     id: root
     property var theme
+    property var backend
 
-    property string meshPath: ""
-    property string normalPath: ""
     property string outputPath: ""
-
-    signal meshSelected(string path)
-    signal normalSelected(string path)
-    signal outputSelected(string path)
 
     function cleanPath(url) {
         if (!url) {
@@ -76,14 +71,18 @@ Item {
                         Button {
                             text: "Browse"
                             Layout.preferredWidth: 110
-                            onClicked: meshDialog.open()
+                            onClicked: {
+                                if (backend) {
+                                    backend.browseMesh(backend.meshPath)
+                                }
+                            }
                         }
 
                         Label {
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             color: theme.textSecondary
-                            text: meshPath === "" ? "No mesh selected" : meshPath
+                            text: !backend || backend.meshPath === "" ? "No mesh selected" : backend.meshPath
                         }
                     }
 
@@ -106,7 +105,9 @@ Item {
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             color: theme.textSecondary
-                            text: normalPath === "" ? "No normal map selected" : normalPath
+                            text: !backend || backend.normalPath === ""
+                                  ? "No normal map selected"
+                                  : backend.normalPath
                         }
                     }
 
@@ -160,15 +161,52 @@ Item {
                         spacing: theme.spacing
 
                         Label {
+                            text: "Material"
+                            color: theme.textPrimary
+                        }
+
+                        ComboBox {
+                            id: materialCombo
+                            Layout.fillWidth: true
+                            model: backend ? backend.materials : []
+                            textRole: "name"
+                            valueRole: "id"
+                            enabled: backend && backend.materialCount > 0
+                        }
+                    }
+
+                    Label {
+                        visible: backend && backend.materialCount === 0
+                        text: "No materials detected"
+                        color: theme.textMuted
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spacing
+
+                        Label {
                             text: "UV Set"
                             color: theme.textPrimary
                         }
 
                         ComboBox {
+                            id: uvSetCombo
                             Layout.fillWidth: true
-                            model: ["Auto", "UVSet1", "UVSet2"]
-                            enabled: false
+                            model: backend ? backend.uvSets : []
+                            textRole: "name"
+                            enabled: backend && backend.uvSetCount > 0
                         }
+                    }
+
+                    Label {
+                        visible: backend && backend.uvSetCount === 0
+                        text: "No UV sets detected"
+                        color: theme.textMuted
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
                     }
 
                     CheckBox {
@@ -285,10 +323,14 @@ Item {
                     }
 
                     Button {
-                        text: "Inspect Mesh"
-                        enabled: false
+                        text: backend && backend.inspectRunning ? "Inspecting…" : "Inspect Mesh"
                         Layout.fillWidth: true
-                        onClicked: console.log("Inspect requested (placeholder)")
+                        enabled: backend && backend.meshPath !== "" && !backend.inspectRunning
+                        onClicked: {
+                            if (backend) {
+                                backend.runInspect(backend.meshPath)
+                            }
+                        }
                     }
 
                     Button {
@@ -303,22 +345,13 @@ Item {
     }
 
     FileDialog {
-        id: meshDialog
-        title: "Select mesh"
-        nameFilters: ["Meshes (*.fbx *.obj *.gltf *.glb)", "All files (*)"]
-        onAccepted: {
-            meshPath = cleanPath(selectedFile)
-            meshSelected(meshPath)
-        }
-    }
-
-    FileDialog {
         id: normalDialog
         title: "Select normal map"
         nameFilters: ["Images (*.png *.exr *.tif *.tiff)", "All files (*)"]
         onAccepted: {
-            normalPath = cleanPath(selectedFile)
-            normalSelected(normalPath)
+            if (backend) {
+                backend.setNormalPath(cleanPath(selectedFile))
+            }
         }
     }
 
@@ -327,7 +360,6 @@ Item {
         title: "Select output directory"
         onAccepted: {
             outputPath = cleanPath(selectedFolder)
-            outputSelected(outputPath)
         }
     }
 }

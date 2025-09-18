@@ -5,10 +5,7 @@ import QtQuick.Layouts 1.15
 Item {
     id: root
     property var theme
-
-    property string statusText: "Ready"
-    property string logText: "Waiting for job output..."
-    property real progress: 0.0
+    property var backend
 
     Rectangle {
         anchors.fill: parent
@@ -26,14 +23,14 @@ Item {
             spacing: theme.spacing
 
             Label {
-                text: statusText
+                text: backend ? backend.statusMessage : "Ready"
                 color: theme.textPrimary
                 font.pixelSize: 14
                 Layout.fillWidth: true
             }
 
             ProgressBar {
-                value: progress
+                value: backend && backend.inspectRunning ? 0.25 : 0.0
                 from: 0
                 to: 1
                 Layout.preferredWidth: 220
@@ -41,7 +38,7 @@ Item {
 
             Button {
                 text: "Cancel"
-                enabled: false
+                enabled: backend && backend.inspectRunning
             }
 
             Button {
@@ -61,7 +58,7 @@ Item {
             ScrollView {
                 anchors.fill: parent
                 TextArea {
-                    text: logText
+                    text: backend ? backend.logText : "Waiting for job output..."
                     readOnly: true
                     color: theme.textSecondary
                     background: null
