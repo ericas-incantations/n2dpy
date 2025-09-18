@@ -7,12 +7,6 @@ normal2disp converts tangent-space normal maps into scalar displacement textures
 * **Outputs:** Single-channel 32-bit float OpenEXR displacement maps per UDIM tile (`height` channel) enriched with metadata. Optional sidecars include chart ID masks, boundary masks, and per-tile chart tables in JSON.
 * **Use cases:** Reconstruct sculpted height detail from shipped normal maps, prepare assets for displacement-capable renderers, validate UDIM coverage before baking, or preview displacement inside the bundled GUI.
 
-## Installation & Environment
-* Target Python version: **3.12**. Use a virtual environment and install dependencies from `requirements.txt`. A helper script `./codex-setup.sh` prepares the development environment used in this repository.
-* OpenImageIO and pyassimp are required for full functionality; conda-forge packages are recommended when available.
-* Windows packaging instructions live in [`PACKAGING_WIN.md`](PACKAGING_WIN.md).
-* Repository policy: source only. **Do not commit build outputs or generated binaries** (executables, images, archives, etc.).
-
 ## Quick Start (CLI)
 All commands share the `--verbose` flag on the root `n2d` group for detailed logging.
 
