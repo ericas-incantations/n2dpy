@@ -1,0 +1,1 @@
+Add your Windows .ico and other icon assets locally before building installers.

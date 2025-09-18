@@ -161,7 +161,7 @@ Cancellation: worker checks an Event between charts and at safe stage boundaries
 ### GUI‑P6 — Packaging & Installers
 
 * Add `pyside6-deploy` config; produce per‑OS bundles.
-* Windows: create Inno Setup script; macOS: codesign/notarize hooks + DMG; Linux: AppImage via linuxdeploy.
+* Windows: create Inno Setup script (**implemented – see `PACKAGING_WIN.md` for usage**); macOS: codesign/notarize hooks + DMG (later); Linux: AppImage via linuxdeploy (later).
 * CI: GitHub Actions matrix builds on tag push; publish artifacts.
 
 ### GUI‑P7 — Polish & Presets

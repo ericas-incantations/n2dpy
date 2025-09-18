@@ -1,0 +1,22 @@
+{
+  "project_dir": ".",
+  "entry_point": "normal2disp/gui/entrypoint.py",
+  "application_name": "normal2disp GUI",
+  "extra_env": {
+    "QT_QPA_PLATFORM": "offscreen"
+  },
+  "include_files": [
+    {
+      "source": "normal2disp/gui/qml",
+      "destination": "qml"
+    }
+  ],
+  "extra_modules": [
+    "normal2disp",
+    "n2d_gui"
+  ],
+  "resources": [],
+  "python_paths": [
+    "normal2disp"
+  ]
+}
