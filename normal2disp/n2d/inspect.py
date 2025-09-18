@@ -98,8 +98,11 @@ def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
     if use_pyassimp:
         try:
             _ensure_pyassimp_dependencies()
+            import pyassimp
             from pyassimp import errors as pyassimp_errors_mod
             from pyassimp import load as assimp_load_mod
+
+            _apply_pyassimp_workarounds(pyassimp)
 
             assimp_load = assimp_load_mod
             pyassimp_errors = pyassimp_errors_mod
@@ -414,6 +417,86 @@ def _analyse_uv_set(
     )
 
 
+def _apply_pyassimp_workarounds(pyassimp_module: types.ModuleType) -> None:
+    """Install runtime patches that make pyassimp more tolerant of bad FBX data."""
+
+    core = getattr(pyassimp_module, "core", None)
+    if core is None:
+        return
+
+    if getattr(core, "_n2d_safe_init", False):  # type: ignore[attr-defined]
+        return
+
+    original_init = getattr(core, "_init", None)
+    if not callable(original_init):  # pragma: no cover - depends on pyassimp internals
+        return
+
+    def _safe_init(self: Any, target: Any | None = None, parent: Any | None = None) -> Any:
+        try:
+            return original_init(self, target=target, parent=parent)
+        except ValueError as exc:
+            message = str(exc)
+            if "NULL pointer access" not in message:
+                raise
+
+            _LOGGER.warning(
+                "pyassimp reported NULL pointer access while initialising %s; "
+                "treating missing data as empty to continue",
+                self,
+            )
+            _zero_null_pointer_counters(self)
+            return original_init(self, target=target, parent=parent)
+
+    setattr(core, "_init", _safe_init)
+    setattr(core, "_n2d_safe_init", True)
+
+
+def _zero_null_pointer_counters(struct: Any) -> None:
+    """Reset counter fields whose pointer data is unexpectedly NULL."""
+
+    for attr in dir(struct):
+        if not attr.startswith("mNum"):
+            continue
+
+        suffix = attr[4:]
+        pointer_name = f"m{suffix}"
+        if not hasattr(struct, pointer_name):
+            continue
+
+        try:
+            count = getattr(struct, attr)
+        except Exception:  # pragma: no cover - defensive
+            continue
+
+        if isinstance(count, np.ndarray):
+            # ctypes values sometimes surface as tiny numpy arrays; convert to scalar.
+            if count.size != 1:
+                continue
+            count = int(count[0])
+
+        if not isinstance(count, (int, np.integer)) or count <= 0:
+            continue
+
+        pointer_value: Any
+        try:
+            pointer_value = getattr(struct, pointer_name)
+        except Exception:  # pragma: no cover - defensive
+            continue
+
+        try:
+            is_null = not bool(pointer_value)
+        except Exception:  # pragma: no cover - defensive
+            is_null = False
+
+        if not is_null:
+            continue
+
+        try:
+            setattr(struct, attr, 0)
+        except Exception:  # pragma: no cover - ctypes structures may forbid assignment
+            pass
+
+
 def _ensure_pyassimp_dependencies() -> None:
     try:
         import distutils  # type: ignore  # noqa: F401
@@ -452,6 +535,21 @@ def _install_distutils_stub() -> None:
     sysconfig_module.get_config_var = sysconfig.get_config_var  # type: ignore[attr-defined]
     sysconfig_module.get_config_vars = sysconfig.get_config_vars  # type: ignore[attr-defined]
     sysconfig_module.get_paths = sysconfig.get_paths  # type: ignore[attr-defined]
+
+    def _get_python_lib(plat_specific: bool = False, standard_lib: bool = False) -> str:
+        """Minimal ``distutils.sysconfig.get_python_lib`` replacement."""
+
+        if standard_lib:
+            key = "platstdlib" if plat_specific else "stdlib"
+        else:
+            key = "platlib" if plat_specific else "purelib"
+
+        path = sysconfig.get_path(key)
+        if not isinstance(path, str):
+            raise ImportError(f"Unable to resolve python lib path for key '{key}'")
+        return path
+
+    sysconfig_module.get_python_lib = _get_python_lib  # type: ignore[attr-defined]
 
     distutils_module.sysconfig = sysconfig_module  # type: ignore[attr-defined]
     setuptools_module._distutils = distutils_module  # type: ignore[attr-defined]
