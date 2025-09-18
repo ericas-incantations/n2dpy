@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import importlib
 import logging
 import sys
@@ -10,7 +11,8 @@ import types
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Sequence, Set, Tuple
+from contextlib import contextmanager
 
 
 import numpy as np
@@ -32,6 +34,12 @@ _LOGGER = logging.getLogger(__name__)
 
 _UV_EPSILON = 1e-5
 _VECTOR_EPSILON = 1e-6
+
+# ``aiComponent`` bitflags copied from ``include/assimp/config.h`` to avoid importing
+# the assimp shared library simply to query constants. Only the bits we currently
+# need for inspection are defined here.
+_AI_COMPONENT_BONEWEIGHTS = 0x20
+_AI_COMPONENT_ANIMATIONS = 0x40
 
 
 @dataclass(frozen=True)
@@ -98,8 +106,11 @@ def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
     if use_pyassimp:
         try:
             _ensure_pyassimp_dependencies()
+            import pyassimp
             from pyassimp import errors as pyassimp_errors_mod
             from pyassimp import load as assimp_load_mod
+
+            _apply_pyassimp_workarounds(pyassimp)
 
             assimp_load = assimp_load_mod
             pyassimp_errors = pyassimp_errors_mod
@@ -110,12 +121,24 @@ def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
 
     if use_pyassimp and assimp_load is not None and pyassimp_errors is not None:
         try:
-            with assimp_load(str(resolved_path)) as scene:
-                if scene is None or not scene.meshes:
-                    raise MeshLoadError(f"Mesh '{resolved_path}' does not contain any geometry")
+            processing_flags = getattr(
+                pyassimp.postprocess,
+                "aiProcess_Triangulate",
+                0,
+            )
+            remove_component_step = getattr(pyassimp.postprocess, "aiProcess_RemoveComponent", 0)
+            remove_mask = _AI_COMPONENT_ANIMATIONS | _AI_COMPONENT_BONEWEIGHTS
 
-                materials = _extract_materials(scene)
-                vertices, faces, uv_sets, face_materials = _collect_scene_geometry(scene)
+            if remove_component_step:
+                processing_flags |= remove_component_step
+
+            with _assimp_component_removal(pyassimp, remove_mask):
+                with assimp_load(str(resolved_path), processing=processing_flags) as scene:
+                    if scene is None or not scene.meshes:
+                        raise MeshLoadError(f"Mesh '{resolved_path}' does not contain any geometry")
+
+                    materials = _extract_materials(scene)
+                    vertices, faces, uv_sets, face_materials = _collect_scene_geometry(scene)
 
                 uv_infos: Dict[str, UVSetInfo] = {}
                 for name, uv_coords in uv_sets.items():
@@ -414,6 +437,141 @@ def _analyse_uv_set(
     )
 
 
+@contextmanager
+def _assimp_component_removal(pyassimp_module: types.ModuleType, mask: int) -> Iterator[None]:
+    """Temporarily configure Assimp to drop selected components during import."""
+
+    if mask <= 0:
+        yield
+        return
+
+    try:
+        core = getattr(pyassimp_module, "core")
+        assimp_lib = getattr(core, "_assimp_lib", None)
+        dll = getattr(assimp_lib, "dll", None)
+    except AttributeError:
+        dll = None
+
+    if dll is None:
+        yield
+        return
+
+    setter = getattr(dll, "aiSetImportPropertyInteger", None)
+    if setter is None:
+        yield
+        return
+
+    property_name = b"AI_CONFIG_PP_RVC_FLAGS"
+
+    try:
+        setter.argtypes = (ctypes.c_char_p, ctypes.c_int)
+    except AttributeError:
+        pass
+    setter.restype = None
+
+    getter = getattr(dll, "aiGetImportPropertyInteger", None)
+    previous: int | None = None
+    if getter is not None:
+        try:
+            getter.argtypes = (ctypes.c_char_p, ctypes.c_int)
+            getter.restype = ctypes.c_int
+            previous = int(getter(property_name, 0))
+        except AttributeError:
+            previous = None
+        except Exception:  # pragma: no cover - depends on ctypes implementation
+            previous = None
+
+    setter(property_name, int(mask))
+    try:
+        yield
+    finally:
+        restore_value = 0 if previous is None else int(previous)
+        try:
+            setter(property_name, restore_value)
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
+
+
+def _apply_pyassimp_workarounds(pyassimp_module: types.ModuleType) -> None:
+    """Install runtime patches that make pyassimp more tolerant of bad FBX data."""
+
+    core = getattr(pyassimp_module, "core", None)
+    if core is None:
+        return
+
+    if getattr(core, "_n2d_safe_init", False):  # type: ignore[attr-defined]
+        return
+
+    original_init = getattr(core, "_init", None)
+    if not callable(original_init):  # pragma: no cover - depends on pyassimp internals
+        return
+
+    def _safe_init(self: Any, target: Any | None = None, parent: Any | None = None) -> Any:
+        try:
+            return original_init(self, target=target, parent=parent)
+        except ValueError as exc:
+            message = str(exc)
+            if "NULL pointer access" not in message:
+                raise
+
+            _LOGGER.warning(
+                "pyassimp reported NULL pointer access while initialising %s; "
+                "treating missing data as empty to continue",
+                self,
+            )
+            _zero_null_pointer_counters(self)
+            return original_init(self, target=target, parent=parent)
+
+    setattr(core, "_init", _safe_init)
+    setattr(core, "_n2d_safe_init", True)
+
+
+def _zero_null_pointer_counters(struct: Any) -> None:
+    """Reset counter fields whose pointer data is unexpectedly NULL."""
+
+    for attr in dir(struct):
+        if not attr.startswith("mNum"):
+            continue
+
+        suffix = attr[4:]
+        pointer_name = f"m{suffix}"
+        if not hasattr(struct, pointer_name):
+            continue
+
+        try:
+            count = getattr(struct, attr)
+        except Exception:  # pragma: no cover - defensive
+            continue
+
+        if isinstance(count, np.ndarray):
+            # ctypes values sometimes surface as tiny numpy arrays; convert to scalar.
+            if count.size != 1:
+                continue
+            count = int(count[0])
+
+        if not isinstance(count, (int, np.integer)) or count <= 0:
+            continue
+
+        pointer_value: Any
+        try:
+            pointer_value = getattr(struct, pointer_name)
+        except Exception:  # pragma: no cover - defensive
+            continue
+
+        try:
+            is_null = not bool(pointer_value)
+        except Exception:  # pragma: no cover - defensive
+            is_null = False
+
+        if not is_null:
+            continue
+
+        try:
+            setattr(struct, attr, 0)
+        except Exception:  # pragma: no cover - ctypes structures may forbid assignment
+            pass
+
+
 def _ensure_pyassimp_dependencies() -> None:
     try:
         import distutils  # type: ignore  # noqa: F401
@@ -452,6 +610,21 @@ def _install_distutils_stub() -> None:
     sysconfig_module.get_config_var = sysconfig.get_config_var  # type: ignore[attr-defined]
     sysconfig_module.get_config_vars = sysconfig.get_config_vars  # type: ignore[attr-defined]
     sysconfig_module.get_paths = sysconfig.get_paths  # type: ignore[attr-defined]
+
+    def _get_python_lib(plat_specific: bool = False, standard_lib: bool = False) -> str:
+        """Minimal ``distutils.sysconfig.get_python_lib`` replacement."""
+
+        if standard_lib:
+            key = "platstdlib" if plat_specific else "stdlib"
+        else:
+            key = "platlib" if plat_specific else "purelib"
+
+        path = sysconfig.get_path(key)
+        if not isinstance(path, str):
+            raise ImportError(f"Unable to resolve python lib path for key '{key}'")
+        return path
+
+    sysconfig_module.get_python_lib = _get_python_lib  # type: ignore[attr-defined]
 
     distutils_module.sysconfig = sysconfig_module  # type: ignore[attr-defined]
     setuptools_module._distutils = distutils_module  # type: ignore[attr-defined]
