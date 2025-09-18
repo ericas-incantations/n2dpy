@@ -492,6 +492,7 @@ def _assimp_component_removal(pyassimp_module: types.ModuleType, mask: int) -> I
             pass
 
 
+
 def _apply_pyassimp_workarounds(pyassimp_module: types.ModuleType) -> None:
     """Install runtime patches that make pyassimp more tolerant of bad FBX data."""
 
