@@ -6,14 +6,7 @@ import QtQuick.Dialogs 1.3
 Item {
     id: root
     property var theme
-
-    property string meshPath: ""
-    property string normalPath: ""
-    property string outputPath: ""
-
-    signal meshSelected(string path)
-    signal normalSelected(string path)
-    signal outputSelected(string path)
+    property var backend
 
     function cleanPath(url) {
         if (!url) {
@@ -76,14 +69,18 @@ Item {
                         Button {
                             text: "Browse"
                             Layout.preferredWidth: 110
-                            onClicked: meshDialog.open()
+                            onClicked: {
+                                if (backend) {
+                                    backend.browseMesh(backend.meshPath)
+                                }
+                            }
                         }
 
                         Label {
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             color: theme.textSecondary
-                            text: meshPath === "" ? "No mesh selected" : meshPath
+                            text: !backend || backend.meshPath === "" ? "No mesh selected" : backend.meshPath
                         }
                     }
 
@@ -106,7 +103,9 @@ Item {
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             color: theme.textSecondary
-                            text: normalPath === "" ? "No normal map selected" : normalPath
+                            text: !backend || backend.normalPath === ""
+                                  ? "No normal map selected"
+                                  : backend.normalPath
                         }
                     }
 
@@ -129,7 +128,9 @@ Item {
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             color: theme.textSecondary
-                            text: outputPath === "" ? "No output folder selected" : outputPath
+                            text: !backend || backend.outputDirectory === ""
+                                  ? "No output folder selected"
+                                  : backend.outputDirectory
                         }
                     }
                 }
@@ -160,20 +161,57 @@ Item {
                         spacing: theme.spacing
 
                         Label {
+                            text: "Material"
+                            color: theme.textPrimary
+                        }
+
+                        ComboBox {
+                            id: materialCombo
+                            Layout.fillWidth: true
+                            model: backend ? backend.materials : []
+                            textRole: "name"
+                            valueRole: "id"
+                            enabled: backend && backend.materialCount > 0
+                        }
+                    }
+
+                    Label {
+                        visible: backend && backend.materialCount === 0
+                        text: "No materials detected"
+                        color: theme.textMuted
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spacing
+
+                        Label {
                             text: "UV Set"
                             color: theme.textPrimary
                         }
 
                         ComboBox {
+                            id: uvSetCombo
                             Layout.fillWidth: true
-                            model: ["Auto", "UVSet1", "UVSet2"]
-                            enabled: false
+                            model: backend ? backend.uvSets : []
+                            textRole: "name"
+                            enabled: backend && backend.uvSetCount > 0
                         }
                     }
 
+                    Label {
+                        visible: backend && backend.uvSetCount === 0
+                        text: "No UV sets detected"
+                        color: theme.textMuted
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+
                     CheckBox {
+                        id: yDownCheck
                         text: "Y is down"
-                        enabled: false
                         checked: false
                         font.pixelSize: 14
                         Layout.alignment: Qt.AlignLeft
@@ -249,9 +287,41 @@ Item {
                         }
 
                         ComboBox {
+                            id: normalizationCombo
                             Layout.fillWidth: true
                             model: ["Auto", "XYZ", "XY", "None"]
                             currentIndex: 0
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.spacing
+
+                        Label {
+                            text: "CG Tol"
+                            color: theme.textPrimary
+                        }
+
+                        TextField {
+                            id: cgTolField
+                            text: "1e-6"
+                            Layout.fillWidth: true
+                            placeholderText: "1e-6"
+                            inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhPreferNumbers
+                        }
+
+                        Label {
+                            text: "Max iters"
+                            color: theme.textPrimary
+                        }
+
+                        SpinBox {
+                            id: cgMaxSpin
+                            from: 1
+                            to: 200000
+                            value: 10000
+                            Layout.preferredWidth: 120
                         }
                     }
 
@@ -265,6 +335,7 @@ Item {
                         }
 
                         SpinBox {
+                            id: processSpin
                             from: 0
                             to: 32
                             value: 0
@@ -273,42 +344,59 @@ Item {
                     }
 
                     CheckBox {
+                        id: deterministicCheck
                         text: "Deterministic"
                         checked: false
                         Layout.alignment: Qt.AlignLeft
                     }
 
                     CheckBox {
+                        id: sidecarCheck
                         text: "Export sidecars"
                         checked: false
                         Layout.alignment: Qt.AlignLeft
                     }
 
                     Button {
-                        text: "Inspect Mesh"
-                        enabled: false
+                        text: backend && backend.inspectRunning ? "Inspecting…" : "Inspect Mesh"
                         Layout.fillWidth: true
-                        onClicked: console.log("Inspect requested (placeholder)")
+                        enabled: backend && backend.meshPath !== "" && !backend.inspectRunning
+                        onClicked: {
+                            if (backend) {
+                                backend.runInspect(backend.meshPath)
+                            }
+                        }
                     }
 
                     Button {
-                        text: "Bake"
+                        text: backend && backend.bakeRunning ? "Baking…" : "Bake"
                         Layout.fillWidth: true
                         highlighted: true
-                        onClicked: console.log("Bake requested (placeholder)")
+                        enabled: backend
+                                  && backend.meshPath !== ""
+                                  && backend.normalPath !== ""
+                                  && backend.outputDirectory !== ""
+                                  && !backend.bakeRunning
+                        onClicked: {
+                            if (!backend) {
+                                return
+                            }
+                            backend.runBake({
+                                "uvSet": uvSetCombo.currentIndex >= 0 ? uvSetCombo.currentText : "",
+                                "yIsDown": yDownCheck.checked,
+                                "normalization": normalizationCombo.currentText,
+                                "amplitude": amplitudeSlider.value,
+                                "maxSlope": slopeSlider.value,
+                                "cgTol": cgTolField.text,
+                                "cgMaxIter": cgMaxSpin.value,
+                                "deterministic": deterministicCheck.checked,
+                                "processes": processSpin.value,
+                                "exportSidecars": sidecarCheck.checked
+                            })
+                        }
                     }
                 }
             }
-        }
-    }
-
-    FileDialog {
-        id: meshDialog
-        title: "Select mesh"
-        nameFilters: ["Meshes (*.fbx *.obj *.gltf *.glb)", "All files (*)"]
-        onAccepted: {
-            meshPath = cleanPath(selectedFile)
-            meshSelected(meshPath)
         }
     }
 
@@ -317,8 +405,9 @@ Item {
         title: "Select normal map"
         nameFilters: ["Images (*.png *.exr *.tif *.tiff)", "All files (*)"]
         onAccepted: {
-            normalPath = cleanPath(selectedFile)
-            normalSelected(normalPath)
+            if (backend) {
+                backend.setNormalPath(cleanPath(selectedFile))
+            }
         }
     }
 
@@ -326,8 +415,9 @@ Item {
         id: outputDialog
         title: "Select output directory"
         onAccepted: {
-            outputPath = cleanPath(selectedFolder)
-            outputSelected(outputPath)
+            if (backend) {
+                backend.setOutputDirectory(cleanPath(selectedFolder))
+            }
         }
     }
 }

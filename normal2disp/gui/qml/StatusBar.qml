@@ -5,10 +5,7 @@ import QtQuick.Layouts 1.15
 Item {
     id: root
     property var theme
-
-    property string statusText: "Ready"
-    property string logText: "Waiting for job output..."
-    property real progress: 0.0
+    property var backend
 
     Rectangle {
         anchors.fill: parent
@@ -25,15 +22,29 @@ Item {
             Layout.fillWidth: true
             spacing: theme.spacing
 
-            Label {
-                text: statusText
-                color: theme.textPrimary
-                font.pixelSize: 14
+            ColumnLayout {
                 Layout.fillWidth: true
+                spacing: theme.spacing / 4
+
+                Label {
+                    text: backend ? backend.statusMessage : "Ready"
+                    color: theme.textPrimary
+                    font.pixelSize: 14
+                    Layout.fillWidth: true
+                }
+
+                Label {
+                    text: backend ? backend.progressDetail : ""
+                    visible: backend && backend.progressDetail !== ""
+                    color: theme.textSecondary
+                    font.pixelSize: 12
+                    Layout.fillWidth: true
+                }
             }
 
             ProgressBar {
-                value: progress
+                indeterminate: backend && backend.inspectRunning && !(backend.bakeRunning)
+                value: backend ? backend.progressValue : 0
                 from: 0
                 to: 1
                 Layout.preferredWidth: 220
@@ -41,12 +52,20 @@ Item {
 
             Button {
                 text: "Cancel"
-                enabled: false
+                enabled: backend && backend.bakeRunning
+                onClicked: if (backend) backend.cancelBake()
             }
 
             Button {
                 text: "Open Output"
-                enabled: false
+                enabled: backend && backend.canOpenOutput
+                onClicked: if (backend) backend.openOutputFolder()
+            }
+
+            Button {
+                text: "Reveal EXR"
+                enabled: backend && backend.canRevealLatestOutput
+                onClicked: if (backend) backend.revealLatestOutput()
             }
         }
 
@@ -61,7 +80,7 @@ Item {
             ScrollView {
                 anchors.fill: parent
                 TextArea {
-                    text: logText
+                    text: backend ? backend.logText : "Waiting for job output..."
                     readOnly: true
                     color: theme.textSecondary
                     background: null
