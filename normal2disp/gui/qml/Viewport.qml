@@ -88,7 +88,6 @@ Item {
             id: controller
             camera: camera
             target: sceneRoot
-            linearSpeed: 2
         }
     }
 
