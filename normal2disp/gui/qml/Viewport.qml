@@ -1,8 +1,8 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick3D 1.15
-import QtQuick3D.Helpers 1.15
+import QtQuick3D
+import QtQuick3D.Helpers
 
 Item {
     id: root
@@ -25,7 +25,18 @@ Item {
             clearColor: theme.surfaceAlt
             backgroundMode: SceneEnvironment.Color
         }
-        multisampleAAMode: View3D.MSAA4X
+        function configureAntialiasing() {
+            if ("antialiasingMode" in view3d) {
+                view3d.antialiasingMode = View3D.MSAA
+                if ("antialiasingQuality" in view3d) {
+                    view3d.antialiasingQuality = View3D.AntialiasingQualityHigh
+                }
+            } else if ("multisampleAAMode" in view3d) {
+                view3d.multisampleAAMode = View3D.MSAA4X
+            }
+        }
+
+        Component.onCompleted: configureAntialiasing()
 
         Node {
             id: sceneRoot
