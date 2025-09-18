@@ -32,8 +32,8 @@ Item {
 
             DirectionalLight {
                 id: keyLight
-                eulerRotation.x: -35
-                eulerRotation.y: 35
+                eulerRotation.x: backend ? backend.lightElevation : -35
+                eulerRotation.y: backend ? backend.lightAzimuth : 35
                 brightness: 80
             }
 

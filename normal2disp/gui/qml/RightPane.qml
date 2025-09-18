@@ -85,44 +85,14 @@ Item {
             visible: backend && backend.normalPreviewPath !== ""
             text: backend ? backend.normalPreviewPath : ""
         }
-
-        Expander {
-            visible: backend && backend.udimTileCount > 1
+        Label {
             Layout.fillWidth: true
-            Layout.preferredHeight: implicitHeight
-            text: "Tiles (advanced)"
-
-            contentItem: ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: theme.padding
-                spacing: theme.spacing / 2
-
-                Label {
-                    text: backend && backend.selectedTile !== 0
-                          ? "Active tile: " + backend.selectedTile
-                          : "Active tile: —"
-                    color: theme.textPrimary
-                }
-
-                Flow {
-                    width: parent.width
-                    spacing: theme.spacing / 2
-
-                    Repeater {
-                        model: backend ? backend.udimTiles : []
-
-                        delegate: Button {
-                            text: modelData
-                            checkable: true
-                            checked: backend && backend.selectedTile === Number(modelData)
-                            onClicked: {
-                                if (backend) backend.selectTile(Number(modelData))
-                            }
-                        }
-                    }
-                }
-
-            }
+            wrapMode: Text.Wrap
+            visible: backend && backend.udimTileCount > 1
+            color: theme.textSecondary
+            text: backend && backend.selectedTile !== 0
+                  ? "Active tile: " + backend.selectedTile
+                  : "Active tile: —"
         }
     }
 }
