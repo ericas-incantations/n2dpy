@@ -23,6 +23,7 @@ Item {
             spacing: theme.spacing
 
             ColumnLayout {
+
                 Layout.fillWidth: true
                 spacing: theme.spacing / 4
 
@@ -45,6 +46,7 @@ Item {
             ProgressBar {
                 indeterminate: backend && backend.inspectRunning && !(backend.bakeRunning)
                 value: backend ? backend.progressValue : 0
+
                 from: 0
                 to: 1
                 Layout.preferredWidth: 220
@@ -54,6 +56,7 @@ Item {
                 text: "Cancel"
                 enabled: backend && backend.bakeRunning
                 onClicked: if (backend) backend.cancelBake()
+
             }
 
             Button {

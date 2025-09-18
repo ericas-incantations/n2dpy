@@ -12,6 +12,7 @@ from . import qml_path
 from .backend import Backend
 from .image_provider import N2DImageProvider
 
+
 __all__ = ["main"]
 
 
@@ -29,6 +30,7 @@ def main() -> int:
     image_provider = N2DImageProvider()
     backend.register_image_provider(image_provider)
     engine.addImageProvider("n2d", image_provider)
+
     engine.rootContext().setContextProperty("appBackend", backend)
 
     qml_dir = qml_path()

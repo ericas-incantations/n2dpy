@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import multiprocessing as mp
@@ -653,6 +654,7 @@ class BakeJob:
             if self._process.is_alive():
                 self._process.terminate()
                 self._process.join()
+
 
         try:
             self._queue.close()

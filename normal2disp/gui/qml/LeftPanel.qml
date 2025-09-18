@@ -8,6 +8,7 @@ Item {
     property var theme
     property var backend
 
+
     function cleanPath(url) {
         if (!url) {
             return ""
@@ -408,6 +409,7 @@ Item {
             if (backend) {
                 backend.setNormalPath(cleanPath(selectedFile))
             }
+
         }
     }
 
@@ -418,6 +420,7 @@ Item {
             if (backend) {
                 backend.setOutputDirectory(cleanPath(selectedFolder))
             }
+
         }
     }
 }

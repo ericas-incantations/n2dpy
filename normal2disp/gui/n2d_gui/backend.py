@@ -954,3 +954,4 @@ class Backend(QObject):
         if self._normal_preview_path != preview_path:
             self._normal_preview_path = preview_path
             self.normalPreviewPathChanged.emit()
+
