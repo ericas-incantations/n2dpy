@@ -91,7 +91,6 @@ Item {
             linearSpeed: 2
             lookAt: Qt.vector3d(0, 0, 0)
             zoomSpeed: 0.2
-            panSpeed: 0.8
         }
     }
 
