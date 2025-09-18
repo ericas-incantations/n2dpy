@@ -2,3 +2,16 @@
 __pycache__/
 *.pyc
 normal2disp.egg-info/
+/build/
+/dist/
+/_deploy/
+*.exe
+*.dll
+*.pdb
+*.appx
+*.msi
+*.appxupload
+*.icns
+*.ico
+*.png
+*.jpg
