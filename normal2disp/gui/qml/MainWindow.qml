@@ -42,6 +42,7 @@ ApplicationWindow {
             Components.Viewport {
                 id: viewport
                 theme: theme
+                backend: backend
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.preferredWidth: 640

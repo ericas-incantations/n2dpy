@@ -8,7 +8,7 @@ Item {
     property var theme
     property var backend
 
-    property string normalPath: ""
+
     property string outputPath: ""
 
     function cleanPath(url) {
@@ -106,7 +106,9 @@ Item {
                             Layout.fillWidth: true
                             wrapMode: Text.WrapAnywhere
                             color: theme.textSecondary
-                            text: normalPath === "" ? "No normal map selected" : normalPath
+                            text: !backend || backend.normalPath === ""
+                                  ? "No normal map selected"
+                                  : backend.normalPath
                         }
                     }
 
@@ -348,7 +350,10 @@ Item {
         title: "Select normal map"
         nameFilters: ["Images (*.png *.exr *.tif *.tiff)", "All files (*)"]
         onAccepted: {
-            normalPath = cleanPath(selectedFile)
+            if (backend) {
+                backend.setNormalPath(cleanPath(selectedFile))
+            }
+
         }
     }
 
