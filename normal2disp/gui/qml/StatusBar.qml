@@ -41,6 +41,14 @@ Item {
                     font.pixelSize: 12
                     Layout.fillWidth: true
                 }
+
+                Label {
+                    text: backend ? backend.displacementAmplitude : ""
+                    visible: backend && backend.displacementAmplitude !== ""
+                    color: theme.textSecondary
+                    font.pixelSize: 12
+                    Layout.fillWidth: true
+                }
             }
 
             ProgressBar {
