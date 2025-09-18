@@ -1,7 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Dialogs 1.3
+import QtQuick.Dialogs
 
 Item {
     id: root
@@ -532,7 +532,6 @@ Item {
             if (backend) {
                 backend.setNormalPath(cleanPath(selectedFile))
             }
-
         }
     }
 
@@ -543,7 +542,6 @@ Item {
             if (backend) {
                 backend.setOutputDirectory(cleanPath(selectedFolder))
             }
-
         }
     }
 
