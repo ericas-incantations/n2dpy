@@ -80,6 +80,41 @@ Item {
             }
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: theme.spacing
+            visible: !!backend
+
+            Label {
+                text: "Light azimuth"
+                color: theme.textPrimary
+            }
+
+            Slider {
+                id: azimuthSlider
+                from: 0
+                to: 360
+                Layout.fillWidth: true
+                enabled: !!backend
+                value: backend ? backend.lightAzimuth : 35
+                onMoved: if (backend) backend.setLightAzimuth(value)
+            }
+
+            Binding {
+                target: azimuthSlider
+                property: "value"
+                value: backend ? backend.lightAzimuth : 35
+                when: !azimuthSlider.pressed
+            }
+
+            Label {
+                text: backend ? Math.round(backend.lightAzimuth) + "°" : "35°"
+                color: theme.textSecondary
+                Layout.preferredWidth: 48
+                horizontalAlignment: Text.AlignHCenter
+            }
+        }
+
         Frame {
             Layout.fillWidth: true
             Layout.fillHeight: true

@@ -76,6 +76,9 @@ class Backend(QObject):
     displacementStatusChanged = Signal()
     displacementGeometryChanged = Signal()
     displacementAmplitudeChanged = Signal()
+    advancedWarningsChanged = Signal()
+    lightAzimuthChanged = Signal()
+    lightElevationChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -129,6 +132,10 @@ class Backend(QObject):
         self._mesh_buffers: Optional[MeshBuffers] = None
         self._preview_amplitude: Optional[float] = None
         self._preview_units: Optional[str] = None
+        self._tile_warnings: List[str] = []
+        self._light_azimuth: float = 35.0
+        self._light_elevation: float = -35.0
+        self._mesh_tile_preferences: Dict[str, int] = {}
 
         self._temp_dir = Path(tempfile.gettempdir()) / "n2d_gui"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
@@ -278,6 +285,18 @@ class Backend(QObject):
         if units:
             return f"Amplitude {self._preview_amplitude:g} ({units})"
         return f"Amplitude {self._preview_amplitude:g}"
+
+    @Property("QVariant", notify=advancedWarningsChanged)
+    def advancedWarnings(self) -> List[str]:
+        return list(self._tile_warnings)
+
+    @Property(float, notify=lightAzimuthChanged)
+    def lightAzimuth(self) -> float:
+        return float(self._light_azimuth)
+
+    @Property(float, notify=lightElevationChanged)
+    def lightElevation(self) -> float:
+        return float(self._light_elevation)
 
     # ------------------------------------------------------------------
     # Invokable methods
@@ -455,6 +474,38 @@ class Backend(QObject):
         self._append_log(f"Regenerating displacement preview at level {self._displacement_level}")
         self._set_displacement_dirty(False)
         self._start_displacement_job()
+
+    @Slot(float)
+    def setLightAzimuth(self, azimuth: float) -> None:
+        """Adjust the viewport key-light azimuth (yaw)."""
+
+        try:
+            value = float(azimuth)
+        except (TypeError, ValueError):
+            value = self._light_azimuth
+
+        wrapped = max(0.0, min(360.0, value % 360.0))
+        if abs(wrapped - self._light_azimuth) < 1e-6:
+            return
+
+        self._light_azimuth = wrapped
+        self.lightAzimuthChanged.emit()
+
+    @Slot(float)
+    def setLightElevation(self, elevation: float) -> None:
+        """Adjust the viewport key-light elevation (pitch)."""
+
+        try:
+            value = float(elevation)
+        except (TypeError, ValueError):
+            value = self._light_elevation
+
+        clamped = max(-80.0, min(80.0, value))
+        if abs(clamped - self._light_elevation) < 1e-6:
+            return
+
+        self._light_elevation = clamped
+        self.lightElevationChanged.emit()
 
     @Slot(int)
     def selectTile(self, tile: int) -> None:
@@ -917,7 +968,20 @@ class Backend(QObject):
             default_tile = self._udim_tiles[0] if self._udim_tiles else None
 
         self._pending_tile_selection = None
+
+        mesh_path_value = payload.get("path")
+        if mesh_path_value:
+            mesh_key = str(Path(mesh_path_value))
+        else:
+            mesh_key = self._mesh_path
+
+        preferred = self._mesh_tile_preferences.get(mesh_key or "")
+        if preferred in self._udim_tiles:
+            default_tile = preferred
+
         self._set_selected_tile(default_tile)
+
+        self._update_validation_warnings(payload)
 
         material_count = len(self._materials)
         uv_set_count = len(self._uv_sets)
@@ -1149,7 +1213,75 @@ class Backend(QObject):
         self._selected_tile = tile
         if changed:
             self.selectedTileChanged.emit()
+            if tile is not None and self._mesh_path:
+                self._mesh_tile_preferences[str(Path(self._mesh_path))] = tile
         self._update_normal_texture()
+
+    def _update_validation_warnings(self, payload: Dict[str, Any]) -> None:
+        warnings: List[str] = []
+
+        candidate_lists: List[Any] = []
+        validation = payload.get("validation")
+        if validation:
+            candidate_lists.append(validation)
+        alt_validation = payload.get("udim_validation")
+        if alt_validation:
+            candidate_lists.append(alt_validation)
+        extra = payload.get("material_warnings")
+        if extra:
+            candidate_lists.append(extra)
+
+        for entry in candidate_lists:
+            if isinstance(entry, dict):
+                materials = entry.get("materials")
+                if isinstance(materials, dict):
+                    for material_id, material_data in materials.items():
+                        if isinstance(material_data, dict):
+                            missing = material_data.get("missing_tiles") or material_data.get(
+                                "missing"
+                            )
+                            if missing:
+                                if isinstance(missing, (list, tuple, set)):
+                                    missing_list = sorted({int(tile) for tile in missing})
+                                else:
+                                    missing_list = [missing]
+                                name = (
+                                    material_data.get("name")
+                                    or material_data.get("material")
+                                    or material_id
+                                )
+                                warnings.append(
+                                    f"{name} missing {', '.join(str(tile) for tile in missing_list)}"
+                                )
+                elif isinstance(materials, list):
+                    for material_data in materials:
+                        if isinstance(material_data, dict):
+                            missing = material_data.get("missing_tiles") or material_data.get(
+                                "missing"
+                            )
+                            if missing:
+                                if isinstance(missing, (list, tuple, set)):
+                                    missing_list = sorted({int(tile) for tile in missing})
+                                else:
+                                    missing_list = [missing]
+                                name = (
+                                    material_data.get("name")
+                                    or material_data.get("material")
+                                    or "Material"
+                                )
+                                warnings.append(
+                                    f"{name} missing {', '.join(str(tile) for tile in missing_list)}"
+                                )
+            elif isinstance(entry, (list, tuple, set)):
+                for item in entry:
+                    if item:
+                        warnings.append(str(item))
+            elif isinstance(entry, str):
+                warnings.append(entry)
+
+        if warnings != self._tile_warnings:
+            self._tile_warnings = warnings
+            self.advancedWarningsChanged.emit()
 
     def _update_normal_texture(self) -> None:
         provider = self._image_provider

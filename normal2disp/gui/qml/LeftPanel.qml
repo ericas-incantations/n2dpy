@@ -7,6 +7,7 @@ Item {
     id: root
     property var theme
     property var backend
+    property bool advancedOpen: false
 
 
     function cleanPath(url) {
@@ -369,11 +370,11 @@ Item {
                         }
                     }
 
-                    Button {
-                        text: backend && backend.bakeRunning ? "Baking…" : "Bake"
-                        Layout.fillWidth: true
-                        highlighted: true
-                        enabled: backend
+            Button {
+                text: backend && backend.bakeRunning ? "Baking…" : "Bake"
+                Layout.fillWidth: true
+                highlighted: true
+                enabled: backend
                                   && backend.meshPath !== ""
                                   && backend.normalPath !== ""
                                   && backend.outputDirectory !== ""
@@ -394,6 +395,128 @@ Item {
                                 "processes": processSpin.value,
                                 "exportSidecars": sidecarCheck.checked
                             })
+                        }
+                    }
+                }
+            }
+
+            Button {
+                id: advancedToggle
+                text: advancedOpen ? "Advanced ▲" : "Advanced ▼"
+                Layout.fillWidth: true
+                onClicked: advancedOpen = !advancedOpen
+            }
+
+            Frame {
+                id: advancedFrame
+                Layout.fillWidth: true
+                visible: advancedOpen
+                background: Rectangle {
+                    color: theme.surfaceAlt
+                    radius: theme.cornerRadius
+                    border.color: theme.border
+                }
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: theme.padding
+                    spacing: theme.spacing
+
+                    ColumnLayout {
+                        spacing: theme.spacing / 2
+
+                        Label {
+                            text: "Lighting"
+                            color: theme.textSecondary
+                        }
+
+                        RowLayout {
+                            spacing: theme.spacing / 2
+
+                            Label {
+                                text: "Light elevation"
+                                color: theme.textPrimary
+                            }
+
+                            Slider {
+                                id: elevationSlider
+                                from: -80
+                                to: 80
+                                stepSize: 1
+                                Layout.fillWidth: true
+                                enabled: !!backend
+                                value: backend ? backend.lightElevation : -35
+                                onMoved: if (backend) backend.setLightElevation(value)
+                            }
+
+                            Binding {
+                                target: elevationSlider
+                                property: "value"
+                                value: backend ? backend.lightElevation : -35
+                                when: !elevationSlider.pressed
+                            }
+
+                            Label {
+                                text: backend ? Math.round(backend.lightElevation) + "°" : "-35°"
+                                color: theme.textSecondary
+                                Layout.preferredWidth: 48
+                                horizontalAlignment: Text.AlignHCenter
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        visible: backend && backend.advancedWarnings.length > 0
+                        spacing: theme.spacing / 2
+
+                        Repeater {
+                            model: backend ? backend.advancedWarnings : []
+
+                            delegate: Rectangle {
+                                Layout.fillWidth: true
+                                radius: theme.cornerRadius / 2
+                                color: theme.surface
+                                border.color: theme.accent
+                                border.width: 1
+
+                                Label {
+                                    anchors.fill: parent
+                                    anchors.margins: theme.padding / 2
+                                    text: modelData
+                                    wrapMode: Text.WordWrap
+                                    color: theme.accent
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        visible: backend && backend.udimTileCount > 1
+                        spacing: theme.spacing / 2
+
+                        Label {
+                            text: backend && backend.selectedTile !== 0
+                                  ? "Active tile: " + backend.selectedTile
+                                  : "Active tile: —"
+                            color: theme.textPrimary
+                        }
+
+                        Flow {
+                            width: parent.width
+                            spacing: theme.spacing / 2
+
+                            Repeater {
+                                model: backend ? backend.udimTiles : []
+
+                                delegate: Button {
+                                    text: modelData
+                                    checkable: true
+                                    checked: backend && backend.selectedTile === Number(modelData)
+                                    onClicked: {
+                                        if (backend) backend.selectTile(Number(modelData))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -421,6 +544,18 @@ Item {
                 backend.setOutputDirectory(cleanPath(selectedFolder))
             }
 
+        }
+    }
+
+    Connections {
+        target: backend
+        function onUdimTilesChanged() {
+            if (!backend) {
+                return
+            }
+            if (backend.udimTileCount > 1 && !advancedOpen) {
+                advancedOpen = true
+            }
         }
     }
 }
