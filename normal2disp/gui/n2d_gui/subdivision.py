@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import math
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Dict, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -329,7 +328,6 @@ def _create_edge_vertices(
 
     base_count = positions.shape[0]
     for (v0, v1), (face_a, face_b) in edge_faces.items():
-        key = (v0, v1)
         if face_b is None:
             position = (positions[v0] + positions[v1]) * 0.5
             uv_value = (uv[v0] + uv[v1]) * 0.5
