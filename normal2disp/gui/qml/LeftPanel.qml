@@ -1,7 +1,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Dialogs 1.3
+import QtQuick.Dialogs
 
 Item {
     id: root
@@ -234,18 +234,36 @@ Item {
                             to: 10
                             value: 1
                             Layout.fillWidth: true
-                            onMoved: amplitudeSpin.value = value
+                            onValueChanged: amplitudeField.updateFromSlider(value)
                         }
 
-                        SpinBox {
-                            id: amplitudeSpin
-                            from: 0
-                            to: 10
-                            stepSize: 0.1
-                            value: amplitudeSlider.value
-                            editable: true
+                        TextField {
+                            id: amplitudeField
                             Layout.preferredWidth: 80
-                            onValueModified: amplitudeSlider.value = value
+                            text: amplitudeSlider.value.toFixed(1)
+                            horizontalAlignment: Text.AlignHCenter
+                            validator: DoubleValidator {
+                                bottom: amplitudeSlider.from
+                                top: amplitudeSlider.to
+                                decimals: 1
+                            }
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+
+                            function updateFromSlider(value) {
+                                if (!focus) {
+                                    text = value.toFixed(1)
+                                }
+                            }
+
+                            onEditingFinished: {
+                                var parsed = Number(text)
+                                if (isNaN(parsed)) {
+                                    parsed = amplitudeSlider.value
+                                }
+                                parsed = Math.max(amplitudeSlider.from, Math.min(amplitudeSlider.to, parsed))
+                                amplitudeSlider.value = parsed
+                                text = parsed.toFixed(1)
+                            }
                         }
                     }
 
@@ -532,7 +550,6 @@ Item {
             if (backend) {
                 backend.setNormalPath(cleanPath(selectedFile))
             }
-
         }
     }
 
@@ -543,7 +560,6 @@ Item {
             if (backend) {
                 backend.setOutputDirectory(cleanPath(selectedFolder))
             }
-
         }
     }
 
