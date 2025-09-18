@@ -340,7 +340,24 @@ def _analyse_uv_set(
     valid_faces_mask = np.all(valid_vertex_mask[faces], axis=1)
 
     if not valid_faces_mask.any():
-        return UVSetInfo(name=uv_set_name, charts=[], udims=set(), per_material_udims={})
+        empty_faces = np.zeros((0, 3), dtype=np.int64)
+        empty_materials = np.zeros(0, dtype=np.int32)
+        empty_chart_ids = np.zeros(0, dtype=np.int32)
+        mesh_data = UVSetMeshData(
+            faces=empty_faces,
+            uv=uv,
+            face_materials=empty_materials,
+            face_chart_ids=empty_chart_ids,
+            chart_faces={},
+            face_udims=tuple(),
+        )
+        return UVSetInfo(
+            name=uv_set_name,
+            charts=[],
+            udims=set(),
+            per_material_udims={},
+            mesh_data=mesh_data,
+        )
 
     faces_subset = faces[valid_faces_mask]
     face_materials_subset = face_materials[valid_faces_mask]

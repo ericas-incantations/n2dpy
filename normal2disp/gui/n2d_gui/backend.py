@@ -33,6 +33,7 @@ from .jobs import BakeJob, InspectJob
 from .subdivision import (
     DisplacementResult,
     HeightField,
+    HeightFieldError,
     LoopSubdivisionCache,
     MeshBuffers,
     generate_displacement,
@@ -1463,7 +1464,9 @@ class Backend(QObject):
                     height_cache=height_cache,
                 )
             except Exception as exc:  # pragma: no cover - depends on mesh/exr
-                self._invoke_on_main(lambda: self._finalize_displacement_result(request_id, exc))
+                self._invoke_on_main(
+                    lambda err=exc: self._finalize_displacement_result(request_id, err)
+                )
             else:
                 self._invoke_on_main(lambda: self._finalize_displacement_result(request_id, result))
 
