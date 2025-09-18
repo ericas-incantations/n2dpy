@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/n2dbanner.png" alt="normal2disp — tangent normal → displacement" width="900">
+  <img src="assets/icons/n2dbanner.png" alt="normal2disp — tangent normal → displacement" width="900">
 </p>
 
 ## Overview
