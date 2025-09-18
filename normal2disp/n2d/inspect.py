@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import importlib
 import logging
 import sys
@@ -10,7 +11,8 @@ import types
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Sequence, Set, Tuple
+from contextlib import contextmanager
 
 
 import numpy as np
@@ -32,6 +34,12 @@ _LOGGER = logging.getLogger(__name__)
 
 _UV_EPSILON = 1e-5
 _VECTOR_EPSILON = 1e-6
+
+# ``aiComponent`` bitflags copied from ``include/assimp/config.h`` to avoid importing
+# the assimp shared library simply to query constants. Only the bits we currently
+# need for inspection are defined here.
+_AI_COMPONENT_BONEWEIGHTS = 0x20
+_AI_COMPONENT_ANIMATIONS = 0x40
 
 
 @dataclass(frozen=True)
@@ -113,12 +121,24 @@ def inspect_mesh(mesh_path: Path, loader: str = "auto") -> MeshInfo:
 
     if use_pyassimp and assimp_load is not None and pyassimp_errors is not None:
         try:
-            with assimp_load(str(resolved_path)) as scene:
-                if scene is None or not scene.meshes:
-                    raise MeshLoadError(f"Mesh '{resolved_path}' does not contain any geometry")
+            processing_flags = getattr(
+                pyassimp.postprocess,
+                "aiProcess_Triangulate",
+                0,
+            )
+            remove_component_step = getattr(pyassimp.postprocess, "aiProcess_RemoveComponent", 0)
+            remove_mask = _AI_COMPONENT_ANIMATIONS | _AI_COMPONENT_BONEWEIGHTS
 
-                materials = _extract_materials(scene)
-                vertices, faces, uv_sets, face_materials = _collect_scene_geometry(scene)
+            if remove_component_step:
+                processing_flags |= remove_component_step
+
+            with _assimp_component_removal(pyassimp, remove_mask):
+                with assimp_load(str(resolved_path), processing=processing_flags) as scene:
+                    if scene is None or not scene.meshes:
+                        raise MeshLoadError(f"Mesh '{resolved_path}' does not contain any geometry")
+
+                    materials = _extract_materials(scene)
+                    vertices, faces, uv_sets, face_materials = _collect_scene_geometry(scene)
 
                 uv_infos: Dict[str, UVSetInfo] = {}
                 for name, uv_coords in uv_sets.items():
@@ -415,6 +435,62 @@ def _analyse_uv_set(
         per_material_udims=per_material_udims,
         mesh_data=mesh_data,
     )
+
+
+@contextmanager
+def _assimp_component_removal(pyassimp_module: types.ModuleType, mask: int) -> Iterator[None]:
+    """Temporarily configure Assimp to drop selected components during import."""
+
+    if mask <= 0:
+        yield
+        return
+
+    try:
+        core = getattr(pyassimp_module, "core")
+        assimp_lib = getattr(core, "_assimp_lib", None)
+        dll = getattr(assimp_lib, "dll", None)
+    except AttributeError:
+        dll = None
+
+    if dll is None:
+        yield
+        return
+
+    setter = getattr(dll, "aiSetImportPropertyInteger", None)
+    if setter is None:
+        yield
+        return
+
+    property_name = b"AI_CONFIG_PP_RVC_FLAGS"
+
+    try:
+        setter.argtypes = (ctypes.c_char_p, ctypes.c_int)
+    except AttributeError:
+        pass
+    setter.restype = None
+
+    getter = getattr(dll, "aiGetImportPropertyInteger", None)
+    previous: int | None = None
+    if getter is not None:
+        try:
+            getter.argtypes = (ctypes.c_char_p, ctypes.c_int)
+            getter.restype = ctypes.c_int
+            previous = int(getter(property_name, 0))
+        except AttributeError:
+            previous = None
+        except Exception:  # pragma: no cover - depends on ctypes implementation
+            previous = None
+
+    setter(property_name, int(mask))
+    try:
+        yield
+    finally:
+        restore_value = 0 if previous is None else int(previous)
+        try:
+            setter(property_name, restore_value)
+        except Exception:  # pragma: no cover - best effort cleanup
+            pass
+
 
 
 def _apply_pyassimp_workarounds(pyassimp_module: types.ModuleType) -> None:
