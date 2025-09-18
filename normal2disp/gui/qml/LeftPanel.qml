@@ -8,6 +8,7 @@ Item {
     property var theme
     property var backend
 
+
     property string outputPath: ""
 
     function cleanPath(url) {
@@ -352,6 +353,7 @@ Item {
             if (backend) {
                 backend.setNormalPath(cleanPath(selectedFile))
             }
+
         }
     }
 

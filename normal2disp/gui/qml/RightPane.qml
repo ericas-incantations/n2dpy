@@ -123,5 +123,31 @@ Item {
                 }
             }
         }
+
+        Expander {
+            visible: backend && backend.udimTileCount > 1
+            Layout.fillWidth: true
+            Layout.preferredHeight: implicitHeight
+            text: "Advanced"
+
+            contentItem: ColumnLayout {
+                anchors.fill: parent
+                spacing: theme.spacing / 2
+
+                Label {
+                    text: "UDIM Tiles"
+                    color: theme.textPrimary
+                }
+
+                Repeater {
+                    model: backend ? backend.udimTiles : []
+
+                    delegate: Label {
+                        text: modelData
+                        color: theme.textSecondary
+                    }
+                }
+            }
+        }
     }
 }

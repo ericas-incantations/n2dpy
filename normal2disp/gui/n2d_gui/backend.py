@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
+
 from PySide6.QtWidgets import QFileDialog
 
 from .jobs import InspectJob
@@ -36,6 +37,7 @@ class Backend(QObject):
     normalEnabledChanged = Signal()
     selectedTileChanged = Signal()
 
+
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._mesh_path: str = ""
@@ -60,6 +62,7 @@ class Backend(QObject):
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         self._temp_mesh_path: Optional[Path] = None
         self._image_provider: Optional[N2DImageProvider] = None
+
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(150)
@@ -139,6 +142,7 @@ class Backend(QObject):
     @Property(int, notify=selectedTileChanged)
     def selectedTile(self) -> int:
         return int(self._selected_tile) if self._selected_tile is not None else 0
+
 
     # ------------------------------------------------------------------
     # Invokable methods
@@ -253,6 +257,7 @@ class Backend(QObject):
         self._image_provider = provider
         self._update_normal_texture()
 
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -325,6 +330,7 @@ class Backend(QObject):
         self._pending_tile_selection = None
         self._set_selected_tile(default_tile)
 
+
         material_count = len(self._materials)
         uv_set_count = len(self._uv_sets)
         tile_count = len(self._udim_tiles) if self._udim_tiles else 1
@@ -357,6 +363,7 @@ class Backend(QObject):
         mesh_path = payload.get("path") or self._mesh_path
         if mesh_path:
             self._load_viewport_mesh(Path(mesh_path))
+
 
     def _poll_job_queue(self) -> None:
         if not self._inspect_job:
@@ -526,3 +533,4 @@ class Backend(QObject):
         if self._normal_preview_path != preview_path:
             self._normal_preview_path = preview_path
             self.normalPreviewPathChanged.emit()
+
