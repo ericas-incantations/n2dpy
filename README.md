@@ -1,4 +1,6 @@
-# normal2disp
+<p align="center">
+  <img src="assets/n2dbanner.png" alt="normal2disp — tangent normal → displacement" width="900">
+</p>
 
 ## Overview
 normal2disp converts tangent-space normal maps into scalar displacement textures by integrating the slopes implied by each pixel. The toolchain is built around a robust CPU-only pipeline that inspects meshes, validates UDIM coverage, integrates normal maps per UV chart, and exports OpenEXR height fields ready for look-dev or offline rendering workflows. Both a command line interface (CLI) and a Qt Quick 3D GUI are included so teams can automate large batches or drive the bake interactively.
